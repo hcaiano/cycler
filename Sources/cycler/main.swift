@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastTrusted = AXIsProcessTrusted()
     private var trustTimer: Timer?
     private var trustPollTicks = 0
+    private var settingsWindowController: SettingsWindowController?
 
     /// `~/.config/cycler/bindings.json` — the user's per-app hotkey bindings.
     static var configURL: URL {
@@ -77,6 +78,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
     }
 
+    private func saveConfigAndReload(_ newConfig: CyclerConfig) throws {
+        let url = AppDelegate.configURL
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try newConfig.encoded().write(to: url, options: .atomic)
+        reloadBindings()
+    }
+
+    private func setRecordingShortcut(_ recording: Bool) {
+        if recording {
+            HotkeyManager.shared.unregisterAll()
+        } else {
+            registerHotkeys()
+        }
+        buildStatusItem()
+    }
+
     // MARK: - Accessibility watch
 
     /// macOS grants Accessibility while the app keeps running; refresh the menu live when the
@@ -135,10 +154,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if config.bindings.isEmpty {
             addInfo(menu, "No app shortcuts configured")
-            addInfo(menu, "Add them in ~/.config/cycler/bindings.json")
+            addInfo(menu, "Use Settings or edit ~/.config/cycler/bindings.json")
         } else {
             addInfo(menu, "\(config.bindings.count) app shortcut\(config.bindings.count == 1 ? "" : "s") active")
         }
+        menu.addItem(menuItem("Settings…", #selector(showSettings), symbol: "gearshape"))
         menu.addItem(menuItem("Reload bindings", #selector(reloadBindings), symbol: "arrow.clockwise"))
 
         menu.addItem(.separator())
@@ -176,6 +196,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAbout() { AboutWindowController.show() }
+
+    @objc private func showSettings() {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(context: SettingsContext(
+                config: { [weak self] in self?.config ?? CyclerConfig() },
+                saveConfig: { [weak self] newConfig in try self?.saveConfigAndReload(newConfig) },
+                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) }
+            ))
+        }
+        settingsWindowController?.show()
+    }
 
     @objc private func toggleLaunchAtLogin() {
         do {
