@@ -5,6 +5,11 @@ import ServiceManagement
 import CyclerCore
 import Sparkle
 
+private struct HotkeyCombo: Hashable {
+    var keyCode: Int
+    var modifiers: UInt32
+}
+
 /// Minimal menu-bar agent: loads the per-app bindings, registers their global hotkeys, and on
 /// each press jumps to the bound app / cycles its windows (see AppActivator).
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -55,10 +60,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerHotkeys() {
         var failed = 0
+        let explicitCombos = Set(config.bindings.map { HotkeyCombo(keyCode: $0.keyCode, modifiers: $0.modifiers) })
         for b in config.bindings {
             let bundleID = b.bundleIdentifier
             let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
                 AppActivator.shared.engage(bundleIdentifier: bundleID)
+            }
+            if !ok { failed += 1 }
+        }
+        for b in config.bindings {
+            guard b.modifiers & UInt32(shiftKey) == 0 else { continue }
+            let backwardModifiers = b.modifiers | UInt32(shiftKey)
+            let combo = HotkeyCombo(keyCode: b.keyCode, modifiers: backwardModifiers)
+            guard !explicitCombos.contains(combo) else { continue }
+
+            let bundleID = b.bundleIdentifier
+            let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
+                AppActivator.shared.engage(bundleIdentifier: bundleID, direction: .backward)
             }
             if !ok { failed += 1 }
         }

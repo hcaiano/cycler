@@ -7,9 +7,9 @@ First press of `Hyper + 1` (say, bound to Chrome) brings Chrome to the front. Pr
 and Cycler steps to Chrome's next window, then the next, wrapping around. No Dock hunting, no
 Mission Control. It lives in the menu bar and stays out of the way.
 
-> **Status: early scaffold.** The full pipeline (build, sign, notarize, auto-update, website,
-> CI) is wired and the core window-cycling mechanism works. The configuration UI and the polish
-> are in progress — see [HANDOFF.md](HANDOFF.md) for what's done and what's next.
+> **Status: v0.1 feature surface.** The full pipeline (build, sign, notarize, auto-update,
+> website, CI) is wired, and the Settings UI plus app window cycling are implemented. See
+> [HANDOFF.md](HANDOFF.md) for what's done and what's next.
 
 ## Requirements
 
@@ -21,7 +21,10 @@ Mission Control. It lives in the menu bar and stays out of the way.
 
 ## Configure shortcuts
 
-There's no settings UI yet. Bindings live in `~/.config/cycler/bindings.json`:
+Use **Settings…** from the Cycler menu-bar item to add, edit, remove, and save app shortcuts.
+The app picker suggests running apps and Dock apps, with **Browse…** as a fallback.
+
+Bindings are stored in `~/.config/cycler/bindings.json`:
 
 ```json
 {
@@ -36,8 +39,11 @@ There's no settings UI yet. Bindings live in `~/.config/cycler/bindings.json`:
 - `modifiers` — a Carbon modifier mask. `6912` is the Hyper key (⌃⌥⇧⌘).
 - `bundleIdentifier` — the target app (`osascript -e 'id of app "Safari"'` to look one up).
 
-See [`bindings.example.json`](bindings.example.json). After editing, use **Reload bindings**
-in the menu (or relaunch).
+See [`bindings.example.json`](bindings.example.json). If you edit the file by hand, use
+**Reload bindings** in the menu (or relaunch).
+
+Cycler registers a generated Shift variant for each shortcut that does not already include
+Shift: press the shortcut to cycle forward, press Shift plus that shortcut to cycle backward.
 
 ## Build & run
 

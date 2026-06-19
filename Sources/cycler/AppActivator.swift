@@ -5,14 +5,10 @@ import CyclerCore
 /// The heart of Cycler: press a per-app hotkey to bring an app to the front; press it again to
 /// walk that app's windows one at a time.
 ///
-/// First press (app not already frontmost) = "go to this app": activate it and focus its main
-/// window. Repeat press (app already frontmost) = advance to the next window via the pure
-/// `WindowCycle` order, wrapping around. Window order/focus come from the Accessibility API, so
-/// the app must be Accessibility-trusted (the menu surfaces this when it isn't).
-///
-/// SCAFFOLD NOTE: this is a deliberately small, working baseline. Things the continuing work
-/// will likely want (see HANDOFF.md): filtering minimized/auxiliary windows by AX subrole,
-/// reverse cycling, an on-screen HUD of the window list, and launching a not-running app.
+/// window. Repeat press (app already frontmost) = advance to the next standard, non-minimized
+/// window via the pure `WindowCycle` order, wrapping around. Window order/focus come from the
+/// Accessibility API, so the app must be Accessibility-trusted (the menu surfaces this when it
+/// isn't). A bound app that is not running yet is launched and activated on first press.
 final class AppActivator {
     static let shared = AppActivator()
 
@@ -22,14 +18,14 @@ final class AppActivator {
 
     /// Bring `bundleIdentifier` forward, or cycle its windows if it's already frontmost.
     func engage(bundleIdentifier: String, direction: WindowCycle.Direction = .forward) {
-        guard AXIsProcessTrusted() else {
-            FileHandle.standardError.write(Data("Cycler: Accessibility not granted; cannot cycle windows.\n".utf8))
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+            Self.launch(bundleIdentifier: bundleIdentifier)
+            lastIndex.removeValue(forKey: bundleIdentifier)
             return
         }
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
-            // Not running yet. Launching it is a TODO (see HANDOFF.md); for now, do nothing
-            // rather than guess at a path.
-            FileHandle.standardError.write(Data("Cycler: \(bundleIdentifier) is not running.\n".utf8))
+
+        guard AXIsProcessTrusted() else {
+            FileHandle.standardError.write(Data("Cycler: Accessibility not granted; cannot cycle windows.\n".utf8))
             return
         }
 
@@ -65,7 +61,21 @@ final class AppActivator {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return [] }
-        return windows
+        return windows.filter { isStandardWindow($0) && !isMinimized($0) }
+    }
+
+    private static func isStandardWindow(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &value) == .success,
+              let subrole = value as? String else { return false }
+        return subrole == kAXStandardWindowSubrole as String
+    }
+
+    private static func isMinimized(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success,
+              let minimized = value as? Bool else { return false }
+        return minimized
     }
 
     /// Index of the app's main window (the one AX marks `kAXMainAttribute`), if any.
@@ -89,5 +99,19 @@ final class AppActivator {
 
     private static func activate(_ app: NSRunningApplication) {
         app.activate(options: [.activateAllWindows])
+    }
+
+    private static func launch(bundleIdentifier: String) {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            FileHandle.standardError.write(Data("Cycler: no installed app found for \(bundleIdentifier).\n".utf8))
+            return
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error {
+                FileHandle.standardError.write(Data("Cycler: could not launch \(bundleIdentifier): \(error)\n".utf8))
+            }
+        }
     }
 }
