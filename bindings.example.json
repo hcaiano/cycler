@@ -1,0 +1,6 @@
+{
+  "bindings": [
+    { "keyCode": 18, "modifiers": 6912, "bundleIdentifier": "com.google.Chrome" },
+    { "keyCode": 19, "modifiers": 6912, "bundleIdentifier": "com.apple.Safari" }
+  ]
+}

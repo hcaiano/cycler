@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cycler — jump to an app, cycle its windows</title>
+  <meta name="description" content="Cycler is a tiny macOS menu-bar utility. Bind a key to an app: press it to jump there, press again to walk through that app's windows." />
+  <meta property="og:title" content="Cycler" />
+  <meta property="og:description" content="Jump to an app, press again to walk its windows. A tiny macOS menu-bar utility." />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="mark" aria-hidden="true">
+        <span class="win win-back"></span>
+        <span class="win win-front"></span>
+      </div>
+      <h1>Cycler</h1>
+      <p class="tagline">Jump to an app. Press again to walk its windows.</p>
+      <p class="lede">
+        Bind a hotkey to an app once. The first press brings it to the front; press the
+        same key again to step through that app's open windows, one at a time. No Dock
+        hunting, no Mission Control. Lives in the menu bar, stays out of the way.
+      </p>
+      <p class="status">In development. <a href="https://github.com/hcaiano/cycler">Follow along on GitHub →</a></p>
+    </section>
+
+    <section class="how">
+      <h2>How it works</h2>
+      <ol>
+        <li><strong>Bind a key to an app</strong> — for example, Hyper&nbsp;+&nbsp;1 → Chrome.</li>
+        <li><strong>Press it</strong> — Chrome comes to the front.</li>
+        <li><strong>Press it again</strong> — Cycler walks to Chrome's next window, then the next, wrapping around.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <p>A <a href="https://caiano.com">Caiano</a> utility for macOS 13+.</p>
+  </footer>
+</body>
+</html>

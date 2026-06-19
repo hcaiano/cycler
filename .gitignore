@@ -1,0 +1,21 @@
+# Swift / SwiftPM
+.build/
+*.xcuserstate
+
+# Build artifacts
+dist/
+Icon/AppIcon.iconset/
+Icon/icon-1024.png
+Resources/AppIcon.icns
+
+# Local planning/dev logs (not part of the product)
+task_plan.md
+findings.md
+progress.md
+.planning/
+.plan-attestation
+
+# wrangler local state (web deploys)
+.wrangler/
+web/.wrangler/
+web/node_modules/
