@@ -8,8 +8,7 @@ final class HotkeyManager {
 
     /// Hyperkey = ⌃⌥⇧⌘. Carbon masks, OR'd. (Karabiner/hidutil usually produces this
     /// from Caps Lock; we just listen for the 4-modifier combo.)
-    static let hyper: UInt32 =
-        UInt32(controlKey) | UInt32(optionKey) | UInt32(shiftKey) | UInt32(cmdKey)
+    static let hyper = ShortcutKit.hyper
 
     private var actions: [UInt32: () -> Void] = [:]
     private var refs: [EventHotKeyRef?] = []
