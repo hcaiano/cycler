@@ -51,9 +51,10 @@ Full build / signing / notarization / auto-update details are in [BUILDING.md](B
 
 ## Stack
 
-Native Swift + AppKit menu-bar agent (`LSUIElement`), built with SwiftPM under the Command
-Line Tools (no full Xcode required). Global hotkeys via Carbon `RegisterEventHotKey`; window
-control via the Accessibility API; auto-updates via [Sparkle](https://sparkle-project.org).
+Native Swift + AppKit menu-bar agent (runtime `.accessory` policy at rest), built with SwiftPM
+under the Command Line Tools (no full Xcode required). Global hotkeys via Carbon
+`RegisterEventHotKey`; window control via the Accessibility API; auto-updates via
+[Sparkle](https://sparkle-project.org).
 Same toolchain and conventions as [Lineup](https://github.com/hcaiano/lineup) and Synclock.
 
 ## License

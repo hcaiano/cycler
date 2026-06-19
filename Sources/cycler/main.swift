@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory) // agent: no Dock icon (also LSUIElement)
+        NSApp.setActivationPolicy(.accessory) // agent at rest: no Dock icon until Settings opens.
         _ = AppUpdater.shared  // start Sparkle's scheduled background update checks
         reloadConfig()
         registerHotkeys()
@@ -198,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showAbout() { AboutWindowController.show() }
 
     @objc private func showSettings() {
+        NSApp.setActivationPolicy(.regular)
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(context: SettingsContext(
                 config: { [weak self] in self?.config ?? CyclerConfig() },
@@ -205,7 +206,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) }
             ))
         }
-        settingsWindowController?.show()
+        DispatchQueue.main.async { [weak self] in
+            self?.settingsWindowController?.show()
+        }
     }
 
     @objc private func toggleLaunchAtLogin() {

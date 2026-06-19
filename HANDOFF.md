@@ -55,8 +55,8 @@ Sparkle embedded. Verified end to end.
   `.assetsignore`, plus `.github/workflows/deploy-web.yml` (Cloudflare auto-deploy on push to
   `web/**`). Needs the `CLOUDFLARE_API_TOKEN` repo secret and the `cycler.caiano.com` domain set
   up to actually deploy.
-- **`Resources/Info.plist`** — `LSUIElement`, bundle id `com.caiano.cycler`, version `0.1.0`
-  (build 1), Sparkle keys wired (`SUFeedURL` = `https://cycler.caiano.com/appcast.xml`,
+- **`Resources/Info.plist`** — bundle id `com.caiano.cycler`, version `0.1.0`
+  (build 1), runtime `.accessory` policy at rest, Sparkle keys wired (`SUFeedURL` = `https://cycler.caiano.com/appcast.xml`,
   `SUPublicEDKey` = the **shared Caiano** key, so the existing private key signs releases).
 
 ## What's stubbed / next (roughly in priority order)
