@@ -32,6 +32,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         NSApp.setActivationPolicy(.regular)
+        bindingsView.reloadFromConfig()
         placeWindowIfNeeded()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -340,7 +341,7 @@ private final class BindingsSettingsView: NSView {
         emptyView.isHidden = !drafts.isEmpty
         scroll.isHidden = drafts.isEmpty
         addButton.isHidden = drafts.isEmpty
-        saveButton.isEnabled = !drafts.isEmpty
+        saveButton.isEnabled = true // allow saving an empty list so removing the last binding persists
 
         if drafts.isEmpty {
             statusLabel.stringValue = "No bindings configured."
@@ -466,6 +467,15 @@ private final class BindingsSettingsView: NSView {
 
     func closeTransientUI() {
         pickerIndex = nil
+        rebuildRows()
+    }
+
+    /// Resync drafts from the current on-disk config. Called on every Settings open so a reused
+    /// controller never shows stale drafts or overwrites edits made via Reload bindings / the JSON.
+    func reloadFromConfig() {
+        stopRecording()
+        pickerIndex = nil
+        drafts = ctx.config().bindings.map(BindingDraft.init(binding:))
         rebuildRows()
     }
 
