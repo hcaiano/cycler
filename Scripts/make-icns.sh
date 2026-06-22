@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MASTER="${1:-Icon/icon-1024.png}"
-[ -f "$MASTER" ] || { echo "regenerating master via make-icon.swift"; swift Scripts/make-icon.swift "$MASTER"; }
+[ -f "$MASTER" ] || { echo "regenerating master via Icon/make-icon.swift"; swift Icon/make-icon.swift "$MASTER"; }
 
 ICONSET="Icon/AppIcon.iconset"
 if [ -e "$ICONSET" ]; then

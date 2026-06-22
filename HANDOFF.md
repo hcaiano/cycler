@@ -50,7 +50,7 @@ Sparkle embedded. Verified end to end.
   probe-based identity resolution, hardened-runtime only for Developer ID, inside-out Sparkle
   re-sign, fail-closed guards), `setup-signing.sh`, `make-dmg.sh`, `notarize.sh`,
   `sparkle-keygen.sh`, `sparkle-appcast.sh` (fail-closed: only appcasts a notarized, stapled,
-  Developer-ID DMG), `make-icon.swift` (**placeholder** icon), `make-icns.sh`.
+  Developer-ID DMG), `make-icon.swift` (real Cycler icon generator), `make-icns.sh`.
 - **`web/`** — minimal static landing page + empty `appcast.xml` + `wrangler.toml` +
   `.assetsignore`, plus `.github/workflows/deploy-web.yml` (Cloudflare auto-deploy on push to
   `web/**`). Needs the `CLOUDFLARE_API_TOKEN` repo secret and the `cycler.caiano.com` domain set
@@ -74,11 +74,9 @@ Sparkle embedded. Verified end to end.
 
 ## What's stubbed / next (roughly in priority order)
 
-1. **Real icon + brand pass.** `Scripts/make-icon.swift` and `Theme.menuBarLogo()` are
-   placeholders (overlapping-windows mark on the brand-blue squircle). Commission/design the real
-   icon set, then re-run `make-icns.sh`. The website (`web/`) is a placeholder too — a proper
-   launch site is a `/impeccable` pass later.
-2. **First release.** Once there's a real feature surface: bump version, run the BUILDING.md
+1. **Marketing website.** The website (`web/`) is still a placeholder — replace it with a proper
+   launch site modeled on Lineup's `web/`.
+2. **First release.** Once the website is ready: bump version, run the BUILDING.md
    release sequence (build → notarize app → dmg → notarize dmg → GitHub release → `sparkle-appcast.sh`
    → commit `web/appcast.xml`). That publishes the first auto-updatable build.
 
