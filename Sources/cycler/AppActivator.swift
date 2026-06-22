@@ -54,9 +54,15 @@ final class AppActivator {
         // remembered index), then raise the next one.
         let current = Self.indexOfMain(in: windows) ?? lastIndex[bundleIdentifier]
         guard let nextIdx = WindowCycle.next(count: windows.count, current: current, direction: direction) else { return }
-        Self.raise(windows[nextIdx].element)
+        let targetWindow = windows[nextIdx].element
+        Self.raise(targetWindow)
         Self.activate(app)
         lastIndex[bundleIdentifier] = nextIdx
+        CycleHUD.shared.show(
+            appIcon: app.icon,
+            title: Self.title(of: targetWindow),
+            index: nextIdx,
+            count: windows.count)
     }
 
     // MARK: - AX helpers
@@ -114,6 +120,13 @@ final class AppActivator {
             }
         }
         return nil
+    }
+
+    private static func title(of window: AXUIElement) -> String {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &value) == .success,
+              let title = value as? String else { return "" }
+        return title
     }
 
     /// Raise a window and make it the app's main/focused window.
