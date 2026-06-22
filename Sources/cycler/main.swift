@@ -101,6 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
+        // If the current file couldn't be parsed, Settings shows an empty draft list; preserve the
+        // unreadable original to a .bak before overwriting so a hand-edit mistake isn't lost.
+        if configLoadError, FileManager.default.fileExists(atPath: url.path) {
+            let backup = url.appendingPathExtension("bak")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.copyItem(at: url, to: backup)
+        }
         try newConfig.encoded().write(to: url, options: .atomic)
         reloadBindings()
     }

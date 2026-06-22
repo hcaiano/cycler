@@ -32,7 +32,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         NSApp.setActivationPolicy(.regular)
-        bindingsView.reloadFromConfig()
+        // Resync drafts only when (re)opening a closed window; refocusing a visible window must
+        // not discard unsaved edits.
+        if !window.isVisible { bindingsView.reloadFromConfig() }
         placeWindowIfNeeded()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
