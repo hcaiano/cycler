@@ -1,44 +1,201 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cycler — jump to an app, cycle its windows</title>
-  <meta name="description" content="Cycler is a tiny macOS menu-bar utility. Bind a key to an app: press it to jump there, press again to walk through that app's windows." />
-  <meta property="og:title" content="Cycler" />
-  <meta property="og:description" content="Jump to an app, press again to walk its windows. A tiny macOS menu-bar utility." />
-  <meta property="og:type" content="website" />
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cycler · Jump to an app, then walk its windows on macOS</title>
+  <meta name="description" content="Cycler is a free, open-source macOS menu-bar utility. Bind a hotkey to an app: press it to jump there, press the same key again to step through that app's windows, one at a time. Keyboard-only window navigation, no Dock or Mission Control.">
+  <link rel="canonical" href="https://cycler.caiano.com/">
+  <meta name="theme-color" content="#2F6BFF">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://cycler.caiano.com/">
+  <meta property="og:title" content="Cycler · Jump to an app, then walk its windows on macOS">
+  <meta property="og:description" content="Bind a hotkey to an app. First press jumps to it; press again to cycle that app's windows, one at a time. A tiny, native macOS menu-bar utility.">
+  <meta property="og:image" content="https://cycler.caiano.com/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:site_name" content="Cycler">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Cycler · Jump to an app, then walk its windows on macOS">
+  <meta name="twitter:description" content="Bind a hotkey to an app. First press jumps to it; press again to cycle that app's windows, one at a time. Native macOS, lives in the menu bar.">
+  <meta name="twitter:image" content="https://cycler.caiano.com/assets/og.png">
+
+  <!-- Icons -->
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="apple-touch-icon" href="/assets/icon.png">
+
+  <link rel="stylesheet" href="/styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Cycler",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "macOS 13.0 or later",
+    "url": "https://cycler.caiano.com/",
+    "downloadUrl": "https://github.com/hcaiano/cycler/releases/latest",
+    "description": "A free macOS menu-bar utility. Bind a hotkey to an app to jump to it, then press again to cycle that app's windows one at a time.",
+    "image": "https://cycler.caiano.com/assets/og.png",
+    "license": "https://github.com/hcaiano/cycler/blob/main/LICENSE",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
 </head>
 <body>
+  <header class="site-header">
+    <div class="inner">
+      <a class="brand" href="/">
+        <img src="/assets/icon.png" alt="" width="28" height="28">
+        <span>Cycler</span>
+      </a>
+      <div class="header-actions">
+        <a class="ghlink" href="https://github.com/hcaiano/cycler" rel="noopener">GitHub</a>
+        <a class="btn btn-primary btn-sm" href="https://github.com/hcaiano/cycler/releases/latest" rel="noopener">Download</a>
+      </div>
+    </div>
+  </header>
+
   <main>
     <section class="hero">
-      <div class="mark" aria-hidden="true">
-        <span class="win win-back"></span>
-        <span class="win win-front"></span>
-      </div>
-      <h1>Cycler</h1>
-      <p class="tagline">Jump to an app. Press again to walk its windows.</p>
+      <a class="badge" href="https://github.com/hcaiano/cycler/releases/latest" rel="noopener">
+        <span class="badge-dot" aria-hidden="true"></span>
+        Notarized and Apple-signed
+      </a>
+      <img class="hero-icon" src="/assets/icon.png" alt="Cycler app icon" width="96" height="96">
+      <h1>Jump to an app. Press again to walk its windows.</h1>
       <p class="lede">
-        Bind a hotkey to an app once. The first press brings it to the front; press the
-        same key again to step through that app's open windows, one at a time. No Dock
-        hunting, no Mission Control. Lives in the menu bar, stays out of the way.
+        Bind a hotkey to an app once. The first press brings it to the front; press the same key
+        again to step through that app's open windows, one at a time, wrapping around. No Dock
+        hunting, no Mission Control. It lives in your menu bar and stays out of the way.
       </p>
-      <p class="status">In development. <a href="https://github.com/hcaiano/cycler">Follow along on GitHub →</a></p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/hcaiano/cycler/releases/latest" rel="noopener">
+          Download for Mac
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/hcaiano/cycler" rel="noopener">View on GitHub</a>
+      </div>
+      <ul class="trust">
+        <li>Free, forever</li>
+        <li>Open source (MIT)</li>
+        <li>No tracking, no account</li>
+        <li>Native and lightweight</li>
+        <li>macOS 13+</li>
+      </ul>
+
+      <figure class="hero-shot" aria-label="Cycling through an app's windows">
+        <div class="stage">
+          <span class="wcard wcard-3" aria-hidden="true"></span>
+          <span class="wcard wcard-2" aria-hidden="true"></span>
+          <span class="wcard wcard-1">
+            <span class="wcard-bar" aria-hidden="true"><i></i><i></i><i></i></span>
+          </span>
+          <span class="hud" aria-hidden="true">
+            <span class="hud-icon"></span>
+            <span class="hud-title">Documents</span>
+            <span class="hud-pos">2 / 4</span>
+          </span>
+        </div>
+        <figcaption>Press your key again and Cycler raises the next window, with a quick HUD of what landed.</figcaption>
+      </figure>
     </section>
 
-    <section class="how">
-      <h2>How it works</h2>
+    <section class="features" aria-label="What Cycler does">
+      <div class="feature">
+        <div class="feature-copy">
+          <h2>One key per app</h2>
+          <p>Pick an app and record a shortcut: Hyper&nbsp;+&nbsp;1 for Chrome, Hyper&nbsp;+&nbsp;2
+            for your editor. The first press always takes you straight there, no matter what's in
+            front.</p>
+        </div>
+        <div class="feature-art">
+          <div class="keycaps" aria-hidden="true">
+            <span class="cap is-active">⌃⌥⇧⌘<b>1</b></span>
+            <span class="cap">⌃⌥⇧⌘<b>2</b></span>
+            <span class="cap">⌃⌥⇧⌘<b>3</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-copy">
+          <h2>Walk every window, not just two</h2>
+          <p>Press the same key again and Cycler steps to that app's next window, then the next, and
+            wraps back to the first. It keeps a stable order, so a dozen windows stay reachable.
+            You never get stuck flipping between the same two.</p>
+        </div>
+        <div class="feature-art">
+          <div class="ring" aria-hidden="true">
+            <span class="dot d1 is-active"></span>
+            <span class="dot d2"></span>
+            <span class="dot d3"></span>
+            <span class="dot d4"></span>
+            <span class="ring-arrow">↻</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-copy">
+          <h2>See what you landed on</h2>
+          <p>A small, unobtrusive HUD shows the app icon, the window's title, and where you are in
+            the cycle (<span class="mono">2 / 4</span>), then fades away. It never steals focus, so
+            your typing goes exactly where you expect.</p>
+        </div>
+        <div class="feature-art">
+          <span class="hud hud-static" aria-hidden="true">
+            <span class="hud-icon"></span>
+            <span class="hud-title">Downloads</span>
+            <span class="hud-pos">3 / 4</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-copy">
+          <h2>Reverse, and launch on demand</h2>
+          <p>Add Shift to step backward through the windows. And if a bound app isn't running yet,
+            the first press just launches it, so the same key always means "take me to this app."</p>
+        </div>
+        <div class="feature-art">
+          <div class="rev" aria-hidden="true">
+            <span class="rev-key">⇧ +</span>
+            <span class="rev-arrow">↺</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="steps">
+      <h2>Up and running in a minute</h2>
       <ol>
-        <li><strong>Bind a key to an app</strong> — for example, Hyper&nbsp;+&nbsp;1 → Chrome.</li>
-        <li><strong>Press it</strong> — Chrome comes to the front.</li>
-        <li><strong>Press it again</strong> — Cycler walks to Chrome's next window, then the next, wrapping around.</li>
+        <li><strong>Download</strong> the app and drag it into your Applications folder.</li>
+        <li><strong>Allow it once</strong> in System Settings under Accessibility, so Cycler can
+          raise your windows.</li>
+        <li><strong>Bind your keys</strong> from the menu bar: choose an app, record a shortcut,
+          and start jumping.</li>
       </ol>
+      <a class="btn btn-primary" href="https://github.com/hcaiano/cycler/releases/latest" rel="noopener">
+        Download Cycler
+      </a>
+      <p class="fineprint">
+        Full setup steps are in the
+        <a href="https://github.com/hcaiano/cycler#readme" rel="noopener">README</a>.
+      </p>
     </section>
   </main>
 
-  <footer>
-    <p>A <a href="https://caiano.com">Caiano</a> utility for macOS 13+.</p>
+  <footer class="site-footer">
+    <p>Cycler is free and open source under the MIT license.</p>
+    <p>
+      <a href="https://github.com/hcaiano/cycler" rel="noopener">GitHub</a>
+      ·
+      Made by <a href="https://caiano.com" rel="noopener">Henrique Caiano</a>
+    </p>
   </footer>
 </body>
 </html>
