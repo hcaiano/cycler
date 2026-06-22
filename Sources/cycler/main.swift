@@ -5,6 +5,11 @@ import ServiceManagement
 import CyclerCore
 import Sparkle
 
+private struct HotkeyCombo: Hashable {
+    var keyCode: Int
+    var modifiers: UInt32
+}
+
 /// Minimal menu-bar agent: loads the per-app bindings, registers their global hotkeys, and on
 /// each press jumps to the bound app / cycles its windows (see AppActivator).
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -15,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastTrusted = AXIsProcessTrusted()
     private var trustTimer: Timer?
     private var trustPollTicks = 0
+    private var settingsWindowController: SettingsWindowController?
 
     /// `~/.config/cycler/bindings.json` — the user's per-app hotkey bindings.
     static var configURL: URL {
@@ -23,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory) // agent: no Dock icon (also LSUIElement)
+        NSApp.setActivationPolicy(.accessory) // agent at rest: no Dock icon until Settings opens.
         _ = AppUpdater.shared  // start Sparkle's scheduled background update checks
         reloadConfig()
         registerHotkeys()
@@ -54,10 +60,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerHotkeys() {
         var failed = 0
+        let explicitCombos = Set(config.bindings.map { HotkeyCombo(keyCode: $0.keyCode, modifiers: $0.modifiers) })
         for b in config.bindings {
             let bundleID = b.bundleIdentifier
             let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
                 AppActivator.shared.engage(bundleIdentifier: bundleID)
+            }
+            if !ok { failed += 1 }
+        }
+        for b in config.bindings {
+            guard b.modifiers & UInt32(shiftKey) == 0 else { continue }
+            let backwardModifiers = b.modifiers | UInt32(shiftKey)
+            let combo = HotkeyCombo(keyCode: b.keyCode, modifiers: backwardModifiers)
+            guard !explicitCombos.contains(combo) else { continue }
+
+            let bundleID = b.bundleIdentifier
+            let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
+                AppActivator.shared.engage(bundleIdentifier: bundleID, direction: .backward)
             }
             if !ok { failed += 1 }
         }
@@ -74,6 +93,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotkeyManager.shared.unregisterAll()
         reloadConfig()
         registerHotkeys()
+        buildStatusItem()
+    }
+
+    private func saveConfigAndReload(_ newConfig: CyclerConfig) throws {
+        let url = AppDelegate.configURL
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        // If the current file couldn't be parsed, Settings shows an empty draft list; preserve the
+        // unreadable original to a .bak before overwriting so a hand-edit mistake isn't lost. The
+        // backup is the only safety net here, so a failed backup must abort the save (throw) rather
+        // than overwrite the unrecoverable original.
+        if configLoadError, FileManager.default.fileExists(atPath: url.path) {
+            let backup = url.appendingPathExtension("bak")
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try FileManager.default.removeItem(at: backup)
+            }
+            try FileManager.default.copyItem(at: url, to: backup)
+        }
+        try newConfig.encoded().write(to: url, options: .atomic)
+        reloadBindings()
+    }
+
+    private func setRecordingShortcut(_ recording: Bool) {
+        if recording {
+            HotkeyManager.shared.unregisterAll()
+        } else {
+            registerHotkeys()
+        }
         buildStatusItem()
     }
 
@@ -135,10 +183,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if config.bindings.isEmpty {
             addInfo(menu, "No app shortcuts configured")
-            addInfo(menu, "Add them in ~/.config/cycler/bindings.json")
+            addInfo(menu, "Use Settings or edit ~/.config/cycler/bindings.json")
         } else {
             addInfo(menu, "\(config.bindings.count) app shortcut\(config.bindings.count == 1 ? "" : "s") active")
         }
+        menu.addItem(menuItem("Settings…", #selector(showSettings), symbol: "gearshape"))
         menu.addItem(menuItem("Reload bindings", #selector(reloadBindings), symbol: "arrow.clockwise"))
 
         menu.addItem(.separator())
@@ -176,6 +225,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAbout() { AboutWindowController.show() }
+
+    @objc private func showSettings() {
+        NSApp.setActivationPolicy(.regular)
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(context: SettingsContext(
+                config: { [weak self] in self?.config ?? CyclerConfig() },
+                saveConfig: { [weak self] newConfig in try self?.saveConfigAndReload(newConfig) },
+                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) }
+            ))
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.settingsWindowController?.show()
+        }
+    }
 
     @objc private func toggleLaunchAtLogin() {
         do {

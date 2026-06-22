@@ -50,32 +50,33 @@ Sparkle embedded. Verified end to end.
   probe-based identity resolution, hardened-runtime only for Developer ID, inside-out Sparkle
   re-sign, fail-closed guards), `setup-signing.sh`, `make-dmg.sh`, `notarize.sh`,
   `sparkle-keygen.sh`, `sparkle-appcast.sh` (fail-closed: only appcasts a notarized, stapled,
-  Developer-ID DMG), `make-icon.swift` (**placeholder** icon), `make-icns.sh`.
+  Developer-ID DMG), `make-icon.swift` (real Cycler icon generator), `make-icns.sh`.
 - **`web/`** — minimal static landing page + empty `appcast.xml` + `wrangler.toml` +
   `.assetsignore`, plus `.github/workflows/deploy-web.yml` (Cloudflare auto-deploy on push to
   `web/**`). Needs the `CLOUDFLARE_API_TOKEN` repo secret and the `cycler.caiano.com` domain set
   up to actually deploy.
-- **`Resources/Info.plist`** — `LSUIElement`, bundle id `com.caiano.cycler`, version `0.1.0`
-  (build 1), Sparkle keys wired (`SUFeedURL` = `https://cycler.caiano.com/appcast.xml`,
+- **`Resources/Info.plist`** — bundle id `com.caiano.cycler`, version `0.1.0`
+  (build 1), runtime `.accessory` policy at rest, Sparkle keys wired (`SUFeedURL` = `https://cycler.caiano.com/appcast.xml`,
   `SUPublicEDKey` = the **shared Caiano** key, so the existing private key signs releases).
+
+## What's built now
+
+1. **Settings UI for bindings.** The menu has Settings…, with an AppKit settings window, empty
+   state, inline searchable app picker (running apps + Dock apps + Browse…), key recorder, save,
+   and live reload through the existing bindings path.
+2. **Hardened `AppActivator`.** Cycling filters AX windows to standard, non-minimized windows.
+   Minimized windows are skipped rather than un-minimized.
+3. **Launch a not-running app.** First press resolves the bundle id to an app URL and launches it
+   with `NSWorkspace.openApplication(at:configuration:)`.
+4. **Reverse cycling.** Bindings that do not already include Shift get a generated Shift variant
+   that cycles backward. Explicit user bindings win if they would collide with that generated
+   variant.
 
 ## What's stubbed / next (roughly in priority order)
 
-1. **Settings UI for bindings.** Today bindings are hand-edited JSON. Build a Settings window
-   with a key recorder + app picker (Lineup's `SettingsWindow.swift` / `ShortcutKit.swift` are
-   the reference for the recorder pattern). Until then the menu points users at the JSON file.
-2. **Harden `AppActivator`:** filter out minimized / non-standard windows by AX subrole
-   (`kAXSubroleAttribute` == `kAXStandardWindowSubrole`); decide whether minimized windows should
-   be skipped or un-minimized; consider an on-screen HUD showing the window list as you cycle.
-3. **Launch a not-running app** on first press (currently it no-ops with a log line). Use
-   `NSWorkspace.openApplication(at:configuration:)`.
-4. **Reverse cycling** — `WindowCycle.Direction.backward` is implemented in core but no binding
-   exposes it yet (e.g. add a shift variant).
-5. **Real icon + brand pass.** `Scripts/make-icon.swift` and `Theme.menuBarLogo()` are
-   placeholders (overlapping-windows mark on the brand-blue squircle). Commission/design the real
-   icon set, then re-run `make-icns.sh`. The website (`web/`) is a placeholder too — a proper
-   launch site is a `/impeccable` pass later.
-6. **First release.** Once there's a real feature surface: bump version, run the BUILDING.md
+1. **Marketing website.** The website (`web/`) is still a placeholder — replace it with a proper
+   launch site modeled on Lineup's `web/`.
+2. **First release.** Once the website is ready: bump version, run the BUILDING.md
    release sequence (build → notarize app → dmg → notarize dmg → GitHub release → `sparkle-appcast.sh`
    → commit `web/appcast.xml`). That publishes the first auto-updatable build.
 
