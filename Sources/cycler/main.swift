@@ -102,11 +102,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         // If the current file couldn't be parsed, Settings shows an empty draft list; preserve the
-        // unreadable original to a .bak before overwriting so a hand-edit mistake isn't lost.
+        // unreadable original to a .bak before overwriting so a hand-edit mistake isn't lost. The
+        // backup is the only safety net here, so a failed backup must abort the save (throw) rather
+        // than overwrite the unrecoverable original.
         if configLoadError, FileManager.default.fileExists(atPath: url.path) {
             let backup = url.appendingPathExtension("bak")
-            try? FileManager.default.removeItem(at: backup)
-            try? FileManager.default.copyItem(at: url, to: backup)
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try FileManager.default.removeItem(at: backup)
+            }
+            try FileManager.default.copyItem(at: url, to: backup)
         }
         try newConfig.encoded().write(to: url, options: .atomic)
         reloadBindings()
