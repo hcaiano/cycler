@@ -2,11 +2,15 @@ import AppKit
 import ApplicationServices
 import CyclerCore
 
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// The heart of Cycler: press a per-app hotkey to bring an app to the front; press it again to
 /// walk that app's windows one at a time.
 ///
-/// window. Repeat press (app already frontmost) = advance to the next standard, non-minimized
-/// window via the pure `WindowCycle` order, wrapping around. Window order/focus come from the
+/// First press (app not already frontmost) = "go to this app": activate it and remember its main
+/// standard window. Repeat press (app already frontmost) = advance through a stable CGWindowID
+/// order via the pure `WindowCycle` order, wrapping around. Window focus comes from the
 /// Accessibility API, so the app must be Accessibility-trusted (the menu surfaces this when it
 /// isn't). A bound app that is not running yet is launched and activated on first press.
 final class AppActivator {
@@ -50,18 +54,29 @@ final class AppActivator {
         // remembered index), then raise the next one.
         let current = Self.indexOfMain(in: windows) ?? lastIndex[bundleIdentifier]
         guard let nextIdx = WindowCycle.next(count: windows.count, current: current, direction: direction) else { return }
-        Self.raise(windows[nextIdx])
+        Self.raise(windows[nextIdx].element)
         Self.activate(app)
         lastIndex[bundleIdentifier] = nextIdx
     }
 
     // MARK: - AX helpers
 
-    private static func windows(of axApp: AXUIElement) -> [AXUIElement] {
+    private struct WindowRecord {
+        var element: AXUIElement
+        var windowID: CGWindowID
+    }
+
+    private static func windows(of axApp: AXUIElement) -> [WindowRecord] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return [] }
-        return windows.filter { isStandardWindow($0) && !isMinimized($0) }
+        return windows
+            .filter { isStandardWindow($0) && !isMinimized($0) }
+            .compactMap { window in
+                guard let windowID = windowID(of: window) else { return nil }
+                return WindowRecord(element: window, windowID: windowID)
+            }
+            .sorted { lhs, rhs in lhs.windowID < rhs.windowID }
     }
 
     private static func isStandardWindow(_ window: AXUIElement) -> Bool {
@@ -78,13 +93,24 @@ final class AppActivator {
         return minimized
     }
 
-    /// Index of the app's main window (the one AX marks `kAXMainAttribute`), if any.
-    private static func indexOfMain(in windows: [AXUIElement]) -> Int? {
-        for (i, win) in windows.enumerated() {
+    private static func windowID(of window: AXUIElement) -> CGWindowID? {
+        var windowID = CGWindowID(0)
+        guard _AXUIElementGetWindow(window, &windowID) == .success, windowID != 0 else { return nil }
+        return windowID
+    }
+
+    /// Index of the app's main window within the stable CGWindowID order, if any.
+    private static func indexOfMain(in windows: [WindowRecord]) -> Int? {
+        guard let mainWindowID = mainWindowID(in: windows) else { return nil }
+        return windows.firstIndex { $0.windowID == mainWindowID }
+    }
+
+    private static func mainWindowID(in windows: [WindowRecord]) -> CGWindowID? {
+        for win in windows {
             var value: CFTypeRef?
-            if AXUIElementCopyAttributeValue(win, kAXMainAttribute as CFString, &value) == .success,
+            if AXUIElementCopyAttributeValue(win.element, kAXMainAttribute as CFString, &value) == .success,
                let isMain = value as? Bool, isMain {
-                return i
+                return win.windowID
             }
         }
         return nil
