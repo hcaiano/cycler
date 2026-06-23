@@ -260,10 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hasWarning { menu.addItem(.separator()) }
 
         if config.bindings.isEmpty {
-            addInfo(menu, "No app shortcuts configured")
-            addInfo(menu, "Use Settings or edit ~/.config/cycler/bindings.json")
-        } else {
-            addInfo(menu, "\(config.bindings.count) app shortcut\(config.bindings.count == 1 ? "" : "s") active")
+            addInfo(menu, "No shortcuts yet")
         }
         menu.addItem(menuItem("Settings…", #selector(showSettings), symbol: "gearshape"))
         menu.addItem(menuItem("Reload bindings", #selector(reloadBindings), symbol: "arrow.clockwise"))
