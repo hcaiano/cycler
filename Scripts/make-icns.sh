@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Build all icon artifacts from a 1024x1024 master PNG.
+# Build all icon artifacts from a source PNG, normalized to a 1024x1024 master.
 # Usage:
-#   ./Scripts/make-icns.sh [master.png] [menu-template-glyph.png]
+#   ./Scripts/make-icns.sh [source-icon.png] [menu-template-glyph.png]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MASTER="${1:-Icon/icon-1024.png}"
+SOURCE="${1:-Icon/cycler-app-icon-rebuilt-1024-transparent.png}"
 MENU_GLYPH="${2:-Icon/cycler-c-glyph-transparent-2026-06-23.png}"
+MASTER="Icon/icon-1024.png"
 
-if [ ! -f "$MASTER" ]; then
-  echo "regenerating master via Icon/make-icon.swift"
-  swift Icon/make-icon.swift "$MASTER"
+if [ ! -f "$SOURCE" ]; then
+  SOURCE="Icon/cycler-final-logo-1024-transparent-2026-06-23.png"
 fi
+
+echo "==> normalizing master icon from ${SOURCE}"
+swift Icon/make-icon.swift "$MASTER" "$SOURCE"
 
 WIDTH="$(sips -g pixelWidth "$MASTER" 2>/dev/null | awk '/pixelWidth/{print $2}')"
 HEIGHT="$(sips -g pixelHeight "$MASTER" 2>/dev/null | awk '/pixelHeight/{print $2}')"
@@ -21,9 +24,6 @@ if [ "$WIDTH" != "1024" ] || [ "$HEIGHT" != "1024" ]; then
 fi
 
 mkdir -p Icon Resources web/assets
-if [ "$MASTER" != "Icon/icon-1024.png" ]; then
-  cp "$MASTER" Icon/icon-1024.png
-fi
 
 ICONSET="Icon/AppIcon.iconset"
 if [ -e "$ICONSET" ]; then
@@ -63,35 +63,34 @@ guard let icon = NSImage(contentsOfFile: sourcePath) else {
 
 let canvas = NSSize(width: 1200, height: 630)
 let image = NSImage(size: canvas, flipped: false) { rect in
-    let gradient = NSGradient(colors: [
-        NSColor(srgbRed: 0.94, green: 0.15, blue: 0.16, alpha: 1),
-        NSColor(srgbRed: 0.95, green: 0.35, blue: 0.06, alpha: 1),
-        NSColor(srgbRed: 1.00, green: 0.61, blue: 0.02, alpha: 1),
+    // Clean light card (matches the website); the orange lives in the icon, not the background.
+    let bg = NSGradient(colors: [
+        NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1),
+        NSColor(srgbRed: 0.965, green: 0.973, blue: 0.984, alpha: 1),
     ])!
-    gradient.draw(in: rect, angle: 0)
+    bg.draw(in: rect, angle: -90)
 
-    NSColor.black.withAlphaComponent(0.16).setFill()
-    NSBezierPath(rect: rect).fill()
-
-    let iconSize: CGFloat = 280
+    let iconSize: CGFloat = 296
     let iconRect = NSRect(
-        x: 120,
+        x: 110,
         y: (rect.height - iconSize) / 2,
         width: iconSize,
         height: iconSize)
     icon.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1)
 
+    let ink = NSColor(srgbRed: 0.067, green: 0.086, blue: 0.122, alpha: 1)   // #11161f
+    let muted = NSColor(srgbRed: 0.318, green: 0.357, blue: 0.416, alpha: 1) // #515b6a
     let titleAttrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 96, weight: .bold),
-        .foregroundColor: NSColor.white,
+        .font: NSFont.systemFont(ofSize: 92, weight: .bold),
+        .foregroundColor: ink,
     ]
     let bodyAttrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 42, weight: .medium),
-        .foregroundColor: NSColor.white.withAlphaComponent(0.88),
+        .font: NSFont.systemFont(ofSize: 38, weight: .medium),
+        .foregroundColor: muted,
     ]
-    NSString(string: "Cycler").draw(at: NSPoint(x: 460, y: 340), withAttributes: titleAttrs)
-    NSString(string: "Jump to an app.").draw(at: NSPoint(x: 466, y: 270), withAttributes: bodyAttrs)
-    NSString(string: "Press again to walk its windows.").draw(at: NSPoint(x: 466, y: 218), withAttributes: bodyAttrs)
+    NSString(string: "Cycler").draw(at: NSPoint(x: 470, y: 338), withAttributes: titleAttrs)
+    NSString(string: "Jump to an app.").draw(at: NSPoint(x: 476, y: 276), withAttributes: bodyAttrs)
+    NSString(string: "Press again to walk its windows.").draw(at: NSPoint(x: 476, y: 224), withAttributes: bodyAttrs)
     return true
 }
 
