@@ -238,8 +238,11 @@ private final class WindowRow: NSView {
     func update(title: String, selected: Bool) {
         label.stringValue = title.isEmpty ? "Untitled" : title
         label.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
-        label.textColor = selected ? .white : NSColor.white.withAlphaComponent(0.72)
-        layer?.backgroundColor = selected ? Brand.accent.cgColor : NSColor.clear.cgColor
+        label.textColor = selected ? .white : NSColor.white.withAlphaComponent(0.7)
+        // A soft white wash for the selection — subtle, not a loud brand pill.
+        layer?.backgroundColor = selected
+            ? NSColor.white.withAlphaComponent(0.18).cgColor
+            : NSColor.clear.cgColor
     }
 }
 
