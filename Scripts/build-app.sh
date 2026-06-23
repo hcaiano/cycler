@@ -74,6 +74,9 @@ if grep -q 'REPLACE_WITH_SUPublicEDKey' "${APP}/Contents/Info.plist"; then
   exit 1
 fi
 cp "Resources/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
+for resource in Resources/MenuBarLogoTemplate.png Resources/MenuBarLogoTemplate@2x.png; do
+  [ -f "${resource}" ] && cp "${resource}" "${APP}/Contents/Resources/"
+done
 
 # Embed Sparkle.framework (auto-updates). SwiftPM copies the binary XCFramework's macOS slice
 # next to the product; fall back to the extracted artifact. ditto (not cp) preserves the

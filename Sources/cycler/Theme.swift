@@ -11,10 +11,47 @@ enum Brand {
     /// The red end of the icon gradient (#FA3C28) — for accents that want the hotter hue.
     static let accentHot = NSColor(srgbRed: 0.980, green: 0.235, blue: 0.157, alpha: 1)
 
-    /// Monochrome **template** menu-bar mark: compact window outlines with a clockwise cue,
-    /// matching the app icon motif. Template = the system tints it (white on the dark menu bar,
-    /// dark on light, highlighted when the menu is open).
+    /// Monochrome **template** menu-bar mark: the brand "C" glyph. Template = the system tints it
+    /// (white on the dark menu bar, dark on light, highlighted when the menu is open). Loaded from
+    /// the bundled MenuBarLogoTemplate (.png/@2x); falls back to a drawn glyph when running outside
+    /// the app bundle (e.g. `swift run`).
     static func menuBarLogo() -> NSImage {
+        if let img = Bundle.main.image(forResource: NSImage.Name("MenuBarLogoTemplate")),
+           let glyph = trimmedToContent(img) {
+            glyph.isTemplate = true
+            // Size the trimmed glyph to fill the menu-bar height so it matches neighbouring icons
+            // (the source PNG carries padding that otherwise makes the C look small).
+            let height: CGFloat = 17
+            let aspect = glyph.size.width / max(glyph.size.height, 1)
+            glyph.size = NSSize(width: (height * aspect).rounded(), height: height)
+            return glyph
+        }
+        return drawnMenuBarLogo()
+    }
+
+    /// Crops an image to the bounding box of its non-transparent pixels (removes padding), using
+    /// the highest-resolution representation so the result stays crisp on Retina.
+    private static func trimmedToContent(_ image: NSImage) -> NSImage? {
+        let rep = image.representations
+            .compactMap { $0 as? NSBitmapImageRep }
+            .max(by: { $0.pixelsWide < $1.pixelsWide })
+            ?? image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }
+        guard let rep, let cg = rep.cgImage else { return nil }
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                if x < minX { minX = x }; if x > maxX { maxX = x }
+                if y < minY { minY = y }; if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let crop = CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+        guard let cropped = cg.cropping(to: crop) else { return nil }
+        return NSImage(cgImage: cropped, size: NSSize(width: crop.width, height: crop.height))
+    }
+
+    private static func drawnMenuBarLogo() -> NSImage {
         let size = NSSize(width: 18, height: 17)
         let img = NSImage(size: size, flipped: false) { rect in
             NSColor.black.setFill()
