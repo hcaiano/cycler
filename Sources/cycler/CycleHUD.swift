@@ -7,12 +7,12 @@ final class CycleHUD {
     static let shared = CycleHUD()
 
     private let panel: HUDPanel
-    private let blur = NSVisualEffectView()
     private let iconView = NSImageView()
     private let appLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let rowStack = NSStackView()
     private var rowViews: [WindowRow] = []
+    private var measureView: NSView!     // the padded content; drives the panel's fitting size
     private var dismissWorkItem: DispatchWorkItem?
     private var generation = 0
     private var shownCount = 0
@@ -60,7 +60,7 @@ final class CycleHUD {
             row.update(title: slice[offset], selected: absolute == selectedIndex)
         }
 
-        if let content = panel.contentView {
+        if let content = measureView {
             content.layoutSubtreeIfNeeded()
             let size = NSSize(width: width, height: content.fittingSize.height)
             let screen = NSScreen.main ?? NSScreen.screens.first
@@ -112,19 +112,13 @@ final class CycleHUD {
     }
 
     private func buildContainer() -> NSView {
-        blur.material = .hudWindow
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.maskImage = Self.roundedMask(radius: corner)
-        blur.translatesAutoresizingMaskIntoConstraints = false
-
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
         appLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         appLabel.textColor = NSColor.white.withAlphaComponent(0.92)
         appLabel.lineBreakMode = .byTruncatingTail
         countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        countLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+        countLabel.textColor = NSColor.white.withAlphaComponent(0.5)
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
         countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -136,7 +130,7 @@ final class CycleHUD {
 
         let separator = NSView()
         separator.wantsLayer = true
-        separator.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        separator.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
         separator.translatesAutoresizingMaskIntoConstraints = false
 
         rowStack.orientation = .vertical
@@ -151,19 +145,53 @@ final class CycleHUD {
         column.setCustomSpacing(8, after: separator)
         column.translatesAutoresizingMaskIntoConstraints = false
 
-        blur.addSubview(column)
+        // `content` is the padded surface we measure for the panel's fitting size; it lives inside
+        // whichever glass/blur container we choose below.
+        let content = NSView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(column)
         NSLayoutConstraint.activate([
-            blur.widthAnchor.constraint(equalToConstant: width),
+            content.widthAnchor.constraint(equalToConstant: width),
             iconView.widthAnchor.constraint(equalToConstant: 17),
             iconView.heightAnchor.constraint(equalToConstant: 17),
             separator.heightAnchor.constraint(equalToConstant: 1),
             separator.widthAnchor.constraint(equalTo: column.widthAnchor),
             header.widthAnchor.constraint(equalTo: column.widthAnchor),
             rowStack.widthAnchor.constraint(equalTo: column.widthAnchor),
-            column.leadingAnchor.constraint(equalTo: blur.leadingAnchor, constant: 14),
-            column.trailingAnchor.constraint(equalTo: blur.trailingAnchor, constant: -14),
-            column.topAnchor.constraint(equalTo: blur.topAnchor, constant: 12),
-            column.bottomAnchor.constraint(equalTo: blur.bottomAnchor, constant: -12),
+            column.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            column.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            column.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
+            column.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+        ])
+        measureView = content
+
+        // macOS 26+: real Liquid Glass, which adapts to whatever's behind it. A subtle dark tint
+        // keeps the white text legible even over bright/white backgrounds.
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = corner
+            glass.tintColor = NSColor(white: 0.0, alpha: 0.42)
+            glass.contentView = content
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            return glass
+        }
+
+        // Fallback (< macOS 26): vibrancy forced to a dark appearance so it stays a readable dark
+        // HUD on any background, rounded via a mask image.
+        let blur = NSVisualEffectView()
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.appearance = NSAppearance(named: .vibrantDark)
+        blur.maskImage = Self.roundedMask(radius: corner)
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            content.topAnchor.constraint(equalTo: blur.topAnchor),
+            content.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
         ])
         return blur
     }
@@ -211,7 +239,7 @@ private final class WindowRow: NSView {
         label.stringValue = title.isEmpty ? "Untitled" : title
         label.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
         label.textColor = selected ? .white : NSColor.white.withAlphaComponent(0.72)
-        layer?.backgroundColor = selected ? Brand.blue.cgColor : NSColor.clear.cgColor
+        layer?.backgroundColor = selected ? Brand.accent.cgColor : NSColor.clear.cgColor
     }
 }
 

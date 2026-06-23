@@ -1,11 +1,15 @@
 import AppKit
 
-/// Single source of brand visuals: the fixed brand blue (so the product reads as one brand
+/// Single source of brand visuals: the fixed brand accent (so the product reads as one brand
 /// regardless of the user's system accent) and the menu-bar logo.
 ///
 enum Brand {
-    /// #2F6BFF — the shared Caiano brand blue.
-    static let blue = NSColor(srgbRed: 0.184, green: 0.420, blue: 1.0, alpha: 1)
+    /// #F2580E — Cycler's warm orange, sampled from the app icon's red→orange gradient. Deep
+    /// enough that white text stays legible on a filled fill (e.g. the HUD's selected row).
+    static let accent = NSColor(srgbRed: 0.949, green: 0.345, blue: 0.055, alpha: 1)
+
+    /// The red end of the icon gradient (#FA3C28) — for accents that want the hotter hue.
+    static let accentHot = NSColor(srgbRed: 0.980, green: 0.235, blue: 0.157, alpha: 1)
 
     /// Monochrome **template** menu-bar mark: compact window outlines with a clockwise cue,
     /// matching the app icon motif. Template = the system tints it (white on the dark menu bar,

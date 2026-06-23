@@ -28,7 +28,7 @@ final class AboutWindowController {
 
         let title = NSTextField(labelWithString: "Cycler")
         title.font = .systemFont(ofSize: 28, weight: .bold)
-        title.textColor = Brand.blue
+        title.textColor = Brand.accent
         title.frame = NSRect(x: 0, y: size.height - 86, width: size.width, height: 36)
         title.alignment = .center
 

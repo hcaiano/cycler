@@ -1,9 +1,11 @@
 :root {
-  /* Brand blue ramp (shared with the Lineup/Synclock family). */
-  --blue:       #2f6bff;
-  --blue-cta:   #2a61f0;
-  --blue-press: #1f57e6;
-  --blue-tint:  rgba(47, 107, 255, 0.10);
+  /* Brand orange ramp, sampled from the app icon's red→orange gradient. */
+  --brand:       #f2580e;
+  --brand-cta:   #ea5310;
+  --brand-press: #cc470a;
+  --brand-tint:  rgba(242, 88, 14, 0.10);
+  --brand-hot:   #fa3c28; /* red end of the icon gradient */
+  --brand-grad:  linear-gradient(135deg, #fa3c28 0%, #ff8a1b 100%);
 
   /* Neutral (light) */
   --ink:       #11161f;
@@ -52,7 +54,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--blue); }
+a { color: var(--brand); }
 .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* ---------- Buttons (flat, native) ---------- */
@@ -66,10 +68,10 @@ a { color: var(--blue); }
   white-space: nowrap;
 }
 .btn-sm { padding: 7px 14px; font-size: var(--fs-sm); }
-.btn-primary { background: var(--blue-cta); color: #fff; }
-.btn-primary:hover { background: var(--blue-press); }
+.btn-primary { background: var(--brand-cta); color: #fff; }
+.btn-primary:hover { background: var(--brand-press); }
 .btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
-.btn-ghost:hover { border-color: var(--blue); color: var(--blue); }
+.btn-ghost:hover { border-color: var(--brand); color: var(--brand); }
 
 /* ---------- Header ---------- */
 .site-header {
@@ -129,7 +131,7 @@ h1 {
   backdrop-filter: blur(16px) saturate(140%);
 }
 .hud-static { position: static; transform: none; }
-.hud-icon { width: 36px; height: 36px; border-radius: 9px; background: var(--blue); flex: none; }
+.hud-icon { width: 36px; height: 36px; border-radius: 9px; background: var(--brand-grad); flex: none; }
 .hud-title { font-weight: 600; font-size: var(--fs-base); }
 .hud-pos { font-variant-numeric: tabular-nums; color: rgba(255,255,255,.6); font-size: var(--fs-sm); }
 .hero-shot figcaption { margin-top: var(--sp-4); color: var(--muted); font-size: var(--fs-sm); text-align: center; }
@@ -155,8 +157,8 @@ h1 {
   border-radius: 10px; padding: 9px 11px; min-width: 52px;
 }
 .cap b { font-size: 18px; color: var(--ink); }
-.cap.is-active { border-color: var(--blue); background: var(--blue-tint); color: var(--blue); }
-.cap.is-active b { color: var(--blue); }
+.cap.is-active { border-color: var(--brand); background: var(--brand-tint); color: var(--brand); }
+.cap.is-active b { color: var(--brand); }
 
 /* ring of windows with cycle arrow (flat) */
 .ring { position: relative; width: 180px; height: 180px; border-radius: 50%; border: 2px dashed var(--line); display: grid; place-items: center; }
@@ -165,13 +167,13 @@ h1 {
 .ring .d2 { right: -13px; top: 50%; transform: translateY(-50%); }
 .ring .d3 { bottom: -13px; left: 50%; transform: translateX(-50%); }
 .ring .d4 { left: -13px; top: 50%; transform: translateY(-50%); }
-.ring .dot.is-active { border-color: var(--blue); background: var(--blue-tint); }
-.ring-arrow { font-size: 52px; color: var(--blue); line-height: 1; }
+.ring .dot.is-active { border-color: var(--brand); background: var(--brand-tint); }
+.ring-arrow { font-size: 52px; color: var(--brand); line-height: 1; }
 
 /* reverse (flat) */
 .rev { display: inline-flex; align-items: center; gap: var(--sp-4); }
 .rev-key { font-weight: 700; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
-.rev-arrow { font-size: 60px; color: var(--blue); line-height: 1; }
+.rev-arrow { font-size: 60px; color: var(--brand); line-height: 1; }
 
 /* ---------- Steps ---------- */
 .steps {

@@ -509,14 +509,14 @@ private final class RecorderField: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 1, dy: 1)
         let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
-        (isRecording ? Brand.blue.withAlphaComponent(0.14) : NSColor.textBackgroundColor.withAlphaComponent(0.6)).setFill()
+        (isRecording ? Brand.accent.withAlphaComponent(0.14) : NSColor.textBackgroundColor.withAlphaComponent(0.6)).setFill()
         path.fill()
-        (isRecording ? Brand.blue : NSColor.separatorColor).setStroke()
+        (isRecording ? Brand.accent : NSColor.separatorColor).setStroke()
         path.lineWidth = isRecording ? 2 : 1
         path.stroke()
 
         let str: String, color: NSColor, weight: NSFont.Weight
-        if isRecording { str = "Press keys…"; color = Brand.blue; weight = .regular }
+        if isRecording { str = "Press keys…"; color = Brand.accent; weight = .regular }
         else if text.isEmpty { str = "Record shortcut"; color = .secondaryLabelColor; weight = .regular }
         else { str = text; color = .labelColor; weight = .semibold }
 
