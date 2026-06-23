@@ -22,11 +22,11 @@ final class HotkeyManager {
         FourCharCode(UInt8(ascii: "L"))
 
     /// Register a global hotkey. `keyCode` is a Carbon virtual key (kVK_*).
-    /// Returns true on success. The action is stored ONLY if registration succeeded, so
+    /// Returns the Carbon status. The action is stored ONLY if registration succeeded, so
     /// the menu never advertises a binding that isn't actually live (e.g. another app still
     /// owns the combo).
     @discardableResult
-    func register(keyCode: Int, modifiers: UInt32 = HotkeyManager.hyper, action: @escaping () -> Void) -> Bool {
+    func register(keyCode: Int, modifiers: UInt32 = HotkeyManager.hyper, action: @escaping () -> Void) -> OSStatus {
         installHandlerIfNeeded()
         let id = nextID
         nextID += 1
@@ -35,13 +35,10 @@ final class HotkeyManager {
         let hkID = EventHotKeyID(signature: signature, id: id)
         let status = RegisterEventHotKey(
             UInt32(keyCode), modifiers, hkID, GetApplicationEventTarget(), 0, &ref)
-        guard status == noErr else {
-            FileHandle.standardError.write(Data("RegisterEventHotKey failed (\(status)) for key \(keyCode)\n".utf8))
-            return false
-        }
+        guard status == noErr else { return status }
         actions[id] = action
         refs.append(ref)
-        return true
+        return noErr
     }
 
     /// Tear down all registered hotkeys (used before a clean retry / re-register).

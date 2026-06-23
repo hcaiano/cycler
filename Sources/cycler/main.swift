@@ -10,13 +10,23 @@ private struct HotkeyCombo: Hashable {
     var modifiers: UInt32
 }
 
+private struct FailedHotkey {
+    var bundleIdentifier: String
+    var keyCode: Int
+    var modifiers: UInt32
+    var status: OSStatus
+    var generatedReverse: Bool
+}
+
 /// Minimal menu-bar agent: loads the per-app bindings, registers their global hotkeys, and on
 /// each press jumps to the bound app / cycles its windows (see AppActivator).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var config = CyclerConfig()
     private var configLoadError = false
-    private var failedHotkeys = 0
+    private var failedHotkeys: [FailedHotkey] = []
+    private var failedHotkeyRetryTimer: Timer?
+    private var hotkeysSuspended = false
     private var lastTrusted = AXIsProcessTrusted()
     private var trustTimer: Timer?
     private var trustPollTicks = 0
@@ -30,6 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // agent at rest: no Dock icon until Settings opens.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationBecameActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil)
         _ = AppUpdater.shared  // start Sparkle's scheduled background update checks
         reloadConfig()
         registerHotkeys()
@@ -59,14 +74,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkeys
 
     private func registerHotkeys() {
-        var failed = 0
+        guard !hotkeysSuspended else { return }
+
+        var failed: [FailedHotkey] = []
         let explicitCombos = Set(config.bindings.map { HotkeyCombo(keyCode: $0.keyCode, modifiers: $0.modifiers) })
         for b in config.bindings {
             let bundleID = b.bundleIdentifier
-            let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
+            let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
                 AppActivator.shared.engage(bundleIdentifier: bundleID)
             }
-            if !ok { failed += 1 }
+            if status != noErr {
+                failed.append(FailedHotkey(
+                    bundleIdentifier: b.bundleIdentifier,
+                    keyCode: b.keyCode,
+                    modifiers: b.modifiers,
+                    status: status,
+                    generatedReverse: false))
+            }
         }
         for b in config.bindings {
             guard b.modifiers & UInt32(shiftKey) == 0 else { continue }
@@ -75,12 +99,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !explicitCombos.contains(combo) else { continue }
 
             let bundleID = b.bundleIdentifier
-            let ok = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
+            let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
                 AppActivator.shared.engage(bundleIdentifier: bundleID, direction: .backward)
             }
-            if !ok { failed += 1 }
+            if status != noErr {
+                failed.append(FailedHotkey(
+                    bundleIdentifier: b.bundleIdentifier,
+                    keyCode: b.keyCode,
+                    modifiers: backwardModifiers,
+                    status: status,
+                    generatedReverse: true))
+            }
         }
         failedHotkeys = failed
+        for failure in failedHotkeys {
+            logHotkeyFailure(failure)
+        }
+        updateFailedHotkeyRetryTimer()
     }
 
     @objc private func retryHotkeys() {
@@ -117,12 +152,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setRecordingShortcut(_ recording: Bool) {
+        hotkeysSuspended = recording
         if recording {
+            failedHotkeyRetryTimer?.invalidate()
+            failedHotkeyRetryTimer = nil
             HotkeyManager.shared.unregisterAll()
         } else {
             registerHotkeys()
         }
         buildStatusItem()
+    }
+
+    private func updateFailedHotkeyRetryTimer() {
+        guard !failedHotkeys.isEmpty, !hotkeysSuspended else {
+            failedHotkeyRetryTimer?.invalidate()
+            failedHotkeyRetryTimer = nil
+            return
+        }
+        guard failedHotkeyRetryTimer == nil else { return }
+        failedHotkeyRetryTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.retryFailedHotkeys()
+        }
+    }
+
+    private func retryFailedHotkeys() {
+        guard !failedHotkeys.isEmpty, !hotkeysSuspended else {
+            updateFailedHotkeyRetryTimer()
+            return
+        }
+        HotkeyManager.shared.unregisterAll()
+        registerHotkeys()
+        buildStatusItem()
+    }
+
+    @objc private func applicationBecameActive() {
+        retryFailedHotkeys()
+    }
+
+    private func logHotkeyFailure(_ failure: FailedHotkey) {
+        let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
+        let name = appName(for: failure.bundleIdentifier)
+        let direction = failure.generatedReverse ? " reverse" : ""
+        FileHandle.standardError.write(Data(
+            "RegisterEventHotKey failed (\(failure.status)) for\(direction) \(name) \(combo) key \(failure.keyCode)\n".utf8))
     }
 
     // MARK: - Accessibility watch
@@ -170,8 +242,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(menuItem("Grant Accessibility…", #selector(openAccessibilitySettings), symbol: "lock.shield"))
             hasWarning = true
         }
-        if failedHotkeys > 0 {
-            addInfo(menu, "⚠︎ \(failedHotkeys) shortcut\(failedHotkeys == 1 ? "" : "s") blocked by another app")
+        if !failedHotkeys.isEmpty {
+            addInfo(menu, "⚠︎ \(failedHotkeys.count) shortcut\(failedHotkeys.count == 1 ? "" : "s") blocked")
+            for failure in failedHotkeys.prefix(4) {
+                addInfo(menu, "  \(blockedHotkeyTitle(failure))")
+            }
+            if failedHotkeys.count > 4 {
+                addInfo(menu, "  …and \(failedHotkeys.count - 4) more")
+            }
             menu.addItem(menuItem("Retry shortcuts", #selector(retryHotkeys), symbol: "arrow.clockwise"))
             hasWarning = true
         }
@@ -222,6 +300,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
+    }
+
+    private func blockedHotkeyTitle(_ failure: FailedHotkey) -> String {
+        let prefix = failure.generatedReverse ? "Reverse " : ""
+        let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
+        return "\(prefix)\(appName(for: failure.bundleIdentifier)) \(combo) — \(hotkeyStatusDescription(failure.status))"
+    }
+
+    private func hotkeyStatusDescription(_ status: OSStatus) -> String {
+        if status == -9878 { return "already in use" } // eventHotKeyExistsErr
+        return "status \(status)"
+    }
+
+    private func appName(for bundleIdentifier: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return bundleIdentifier
+        }
+        let name = FileManager.default.displayName(atPath: url.path)
+        return name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
     }
 
     @objc private func showAbout() { AboutWindowController.show() }

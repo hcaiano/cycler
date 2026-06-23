@@ -1,24 +1,33 @@
 import AppKit
 
+/// A small, non-activating window switcher shown while cycling an app's windows: the app, plus the
+/// list of its windows with the current one highlighted, so you can see where the next press lands.
+/// It never becomes key/main, so it cannot steal focus from the app being cycled.
 final class CycleHUD {
     static let shared = CycleHUD()
 
-    private let panel: NSPanel
+    private let panel: HUDPanel
+    private let blur = NSVisualEffectView()
     private let iconView = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let positionLabel = NSTextField(labelWithString: "")
+    private let appLabel = NSTextField(labelWithString: "")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let rowStack = NSStackView()
+    private var rowViews: [WindowRow] = []
     private var dismissWorkItem: DispatchWorkItem?
-    private var displayGeneration = 0
+    private var generation = 0
+    private var shownCount = 0
+
+    private let corner: CGFloat = 14
+    private let width: CGFloat = 320      // fixed: titles truncate, panel never resizes while cycling
+    private let maxVisibleRows = 7
 
     private init() {
         panel = HUDPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 82),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 120),
             styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false)
-        panel.setAccessibilityTitle("Cycler Window HUD")
+            backing: .buffered, defer: false)
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
@@ -26,104 +35,183 @@ final class CycleHUD {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        panel.contentView = buildContentView()
+        panel.contentView = buildContainer()
     }
 
-    func show(appIcon: NSImage?, title: String, index: Int, count: Int) {
-        guard count > 0 else { return }
+    /// Show the app's windows with `selectedIndex` highlighted. No-op for fewer than two windows.
+    func show(appIcon: NSImage?, appName: String, windowTitles: [String], selectedIndex: Int) {
+        guard windowTitles.count > 1 else { return }
 
-        displayGeneration += 1
+        generation += 1
         dismissWorkItem?.cancel()
-        iconView.image = appIcon
-        titleLabel.stringValue = title.isEmpty ? "Untitled Window" : title
-        positionLabel.stringValue = "\(index + 1) / \(count)"
-        positionLabel.isHidden = count <= 1
 
-        panel.layoutIfNeeded()
-        position(on: NSScreen.main ?? NSScreen.screens.first)
+        iconView.image = appIcon
+        appLabel.stringValue = appName
+        countLabel.stringValue = "\(selectedIndex + 1) of \(windowTitles.count)"
+
+        // Rebuild rows only when the window set changes; otherwise just move the highlight so the
+        // panel never resizes or flickers mid-cycle.
+        let window = visibleWindow(count: windowTitles.count, selected: selectedIndex)
+        let slice = Array(windowTitles[window])
+        if slice.count != shownCount { rebuildRows(slice.count) }
+        shownCount = slice.count
+        for (offset, row) in rowViews.enumerated() {
+            let absolute = window.lowerBound + offset
+            row.update(title: slice[offset], selected: absolute == selectedIndex)
+        }
+
+        if let content = panel.contentView {
+            content.layoutSubtreeIfNeeded()
+            let size = NSSize(width: width, height: content.fittingSize.height)
+            let screen = NSScreen.main ?? NSScreen.screens.first
+            let visible = screen?.visibleFrame ?? .zero
+            let origin = NSPoint(x: round(visible.midX - size.width / 2),
+                                 y: round(visible.midY - size.height / 2))
+            panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        }
 
         if !panel.isVisible {
             panel.alphaValue = 0
             panel.orderFrontRegardless()
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.08
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.07
             panel.animator().alphaValue = 1
         }
 
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.hide()
-        }
-        dismissWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85, execute: workItem)
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        dismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     private func hide() {
-        let generation = displayGeneration
-        dismissWorkItem?.cancel()
+        let gen = generation
         dismissWorkItem = nil
         guard panel.isVisible else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.14
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            guard let self, self.displayGeneration == generation else { return }
+            guard let self, self.generation == gen else { return }
             self.panel.orderOut(nil)
         }
     }
 
-    private func buildContentView() -> NSView {
-        let material = NSVisualEffectView()
-        material.material = .hudWindow
-        material.blendingMode = .behindWindow
-        material.state = .active
-        material.wantsLayer = true
-        material.layer?.cornerRadius = 18
-        material.layer?.masksToBounds = true
-
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.textColor = .labelColor
-        titleLabel.lineBreakMode = .byTruncatingMiddle
-        titleLabel.maximumNumberOfLines = 1
-
-        positionLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        positionLabel.textColor = .secondaryLabelColor
-        positionLabel.alignment = .right
-        positionLabel.setContentHuggingPriority(.required, for: .horizontal)
-
-        let textStack = NSStackView(views: [titleLabel, positionLabel])
-        textStack.orientation = .horizontal
-        textStack.alignment = .centerY
-        textStack.spacing = 12
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-
-        material.addSubview(iconView)
-        material.addSubview(textStack)
-
-        NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: material.leadingAnchor, constant: 18),
-            iconView.centerYAnchor.constraint(equalTo: material.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 42),
-            iconView.heightAnchor.constraint(equalToConstant: 42),
-
-            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 14),
-            textStack.trailingAnchor.constraint(equalTo: material.trailingAnchor, constant: -18),
-            textStack.centerYAnchor.constraint(equalTo: material.centerYAnchor),
-        ])
-
-        return material
+    private func rebuildRows(_ count: Int) {
+        rowViews.forEach { $0.removeFromSuperview() }
+        rowViews = (0..<count).map { _ in WindowRow() }
+        rowViews.forEach { rowStack.addArrangedSubview($0) }
+        rowViews.forEach { $0.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true }
     }
 
-    private func position(on screen: NSScreen?) {
-        guard let screen else { return }
-        let frame = panel.frame
-        let visible = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(
-            x: visible.midX - frame.width / 2,
-            y: visible.midY - frame.height / 2))
+    private func visibleWindow(count: Int, selected: Int) -> Range<Int> {
+        guard count > maxVisibleRows else { return 0..<count }
+        var start = max(0, selected - maxVisibleRows / 2)
+        start = min(start, count - maxVisibleRows)
+        return start..<(start + maxVisibleRows)
+    }
+
+    private func buildContainer() -> NSView {
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.maskImage = Self.roundedMask(radius: corner)
+        blur.translatesAutoresizingMaskIntoConstraints = false
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        appLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        appLabel.textColor = NSColor.white.withAlphaComponent(0.92)
+        appLabel.lineBreakMode = .byTruncatingTail
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        countLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+        countLabel.setContentHuggingPriority(.required, for: .horizontal)
+        countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let header = NSStackView(views: [iconView, appLabel, NSView(), countLabel])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 7
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let separator = NSView()
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        separator.translatesAutoresizingMaskIntoConstraints = false
+
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = 1
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let column = NSStackView(views: [header, separator, rowStack])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 9
+        column.setCustomSpacing(8, after: separator)
+        column.translatesAutoresizingMaskIntoConstraints = false
+
+        blur.addSubview(column)
+        NSLayoutConstraint.activate([
+            blur.widthAnchor.constraint(equalToConstant: width),
+            iconView.widthAnchor.constraint(equalToConstant: 17),
+            iconView.heightAnchor.constraint(equalToConstant: 17),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+            separator.widthAnchor.constraint(equalTo: column.widthAnchor),
+            header.widthAnchor.constraint(equalTo: column.widthAnchor),
+            rowStack.widthAnchor.constraint(equalTo: column.widthAnchor),
+            column.leadingAnchor.constraint(equalTo: blur.leadingAnchor, constant: 14),
+            column.trailingAnchor.constraint(equalTo: blur.trailingAnchor, constant: -14),
+            column.topAnchor.constraint(equalTo: blur.topAnchor, constant: 12),
+            column.bottomAnchor.constraint(equalTo: blur.bottomAnchor, constant: -12),
+        ])
+        return blur
+    }
+
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let d = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: d, height: d), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
+}
+
+/// One window in the switcher. Reused across presses; only its title and selection change, so the
+/// panel layout stays stable (no resize, no text jump).
+private final class WindowRow: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 7
+
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.cell?.usesSingleLineMode = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(title: String, selected: Bool) {
+        label.stringValue = title.isEmpty ? "Untitled" : title
+        label.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
+        label.textColor = selected ? .white : NSColor.white.withAlphaComponent(0.72)
+        layer?.backgroundColor = selected ? Brand.blue.cgColor : NSColor.clear.cgColor
     }
 }
 

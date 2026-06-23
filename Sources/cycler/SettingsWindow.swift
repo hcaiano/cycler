@@ -16,24 +16,23 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     init(context: SettingsContext) {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
-        window.title = "Cycler Settings"
-        window.minSize = NSSize(width: 680, height: 460)
+        window.title = "Cycler"
+        window.minSize = NSSize(width: 560, height: 420)
         window.collectionBehavior = [.moveToActiveSpace]
         window.isReleasedWhenClosed = false
         bindingsView = BindingsSettingsView(context: context)
         super.init()
+        bindingsView.hostWindow = window
         window.delegate = self
         window.contentView = bindingsView
     }
 
     func show() {
         NSApp.setActivationPolicy(.regular)
-        // Resync drafts only when (re)opening a closed window; refocusing a visible window must
-        // not discard unsaved edits.
         if !window.isVisible { bindingsView.reloadFromConfig() }
         placeWindowIfNeeded()
         window.makeKeyAndOrderFront(nil)
@@ -44,7 +43,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         bindingsView.stopRecording()
-        bindingsView.closeTransientUI()
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -55,38 +53,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         let visible = screen.visibleFrame
         let frame = window.frame
-        let isUsableFrame = frame.width >= window.minSize.width &&
-            frame.height >= window.minSize.height &&
-            visible.intersects(frame)
-        guard !window.isVisible || !isUsableFrame else { return }
-
-        let width = max(frame.width, window.minSize.width)
-        let height = max(frame.height, window.minSize.height)
-        let origin = NSPoint(
-            x: visible.midX - width / 2,
-            y: visible.midY - height / 2)
-        window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
+        let usable = frame.width >= window.minSize.width && frame.height >= window.minSize.height
+            && visible.intersects(frame)
+        guard !window.isVisible || !usable else { return }
+        let size = NSSize(width: max(frame.width, window.minSize.width),
+                          height: max(frame.height, window.minSize.height))
+        let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        window.setFrame(NSRect(origin: origin, size: size), display: false)
     }
 }
 
+// MARK: - Draft model
+
 private struct BindingDraft {
-    var bundleIdentifier: String?
+    var bundleIdentifier: String
     var appName: String
     var keyCode: Int?
     var modifiers: UInt32?
 
     init(binding: AppBinding) {
         bundleIdentifier = binding.bundleIdentifier
-        appName = AppDisplay.name(forBundleIdentifier: binding.bundleIdentifier)
+        appName = AppInfo.name(forBundleIdentifier: binding.bundleIdentifier)
         keyCode = binding.keyCode
         modifiers = binding.modifiers
     }
 
-    init() {
-        bundleIdentifier = nil
-        appName = ""
-        keyCode = nil
-        modifiers = nil
+    init(bundleIdentifier: String, appName: String) {
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
     }
 
     var shortcutText: String {
@@ -94,42 +88,31 @@ private struct BindingDraft {
         return ShortcutKit.display(keyCode: keyCode, modifiers: modifiers)
     }
 
-    var isComplete: Bool {
-        bundleIdentifier != nil && keyCode != nil && modifiers != nil
-    }
-
-    func binding() -> AppBinding? {
-        guard let bundleIdentifier, let keyCode, let modifiers else { return nil }
+    var binding: AppBinding? {
+        guard let keyCode, let modifiers else { return nil }
         return AppBinding(keyCode: keyCode, modifiers: modifiers, bundleIdentifier: bundleIdentifier)
     }
 }
 
-private enum AppDisplay {
-    static func name(forBundleIdentifier bundleIdentifier: String) -> String {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return bundleIdentifier
-        }
-        return name(forAppURL: url) ?? bundleIdentifier
+// MARK: - App lookup
+
+private enum AppInfo {
+    static func name(forBundleIdentifier id: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return id }
+        return name(forAppURL: url) ?? id
     }
 
     static func name(forAppURL url: URL) -> String? {
         if let bundle = Bundle(url: url) {
-            if let display = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
-               !display.isEmpty {
-                return display
-            }
-            if let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
-               !name.isEmpty {
-                return name
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let v = bundle.object(forInfoDictionaryKey: key) as? String, !v.isEmpty { return v }
             }
         }
         return url.deletingPathExtension().lastPathComponent
     }
 
-    static func icon(forBundleIdentifier bundleIdentifier: String) -> NSImage? {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
-            return nil
-        }
+    static func icon(forBundleIdentifier id: String) -> NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
         return NSWorkspace.shared.icon(forFile: url.path)
     }
 }
@@ -137,95 +120,77 @@ private enum AppDisplay {
 private struct AppChoice {
     var bundleIdentifier: String
     var name: String
-    var url: URL
     var icon: NSImage
 }
 
-private enum AppChoices {
+private enum AppCatalog {
     static func openNow() -> [AppChoice] {
-        let apps = NSWorkspace.shared.runningApplications
+        sortByName(dedup(NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
-            .compactMap(choice(for:))
-        return dedup(apps).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .compactMap { app in
+                guard let id = app.bundleIdentifier, let url = app.bundleURL else { return nil }
+                return AppChoice(bundleIdentifier: id,
+                                 name: AppInfo.name(forAppURL: url) ?? app.localizedName ?? id,
+                                 icon: NSWorkspace.shared.icon(forFile: url.path))
+            }))
     }
 
-    static func inDock(excluding excludedBundleIDs: Set<String>) -> [AppChoice] {
-        let apps = dockAppURLs()
-            .compactMap(choice(forAppURL:))
-            .filter { !excludedBundleIDs.contains($0.bundleIdentifier) }
-        return dedup(apps).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    static func inDock() -> [AppChoice] {
+        sortByName(dedup(dockURLs().compactMap(choice(forURL:))))
     }
 
-    private static func choice(for app: NSRunningApplication) -> AppChoice? {
-        guard let bundleIdentifier = app.bundleIdentifier,
-              let url = app.bundleURL else { return nil }
-        return AppChoice(
-            bundleIdentifier: bundleIdentifier,
-            name: AppDisplay.name(forAppURL: url) ?? app.localizedName ?? bundleIdentifier,
-            url: url,
-            icon: NSWorkspace.shared.icon(forFile: url.path))
+    static func choice(forURL url: URL) -> AppChoice? {
+        guard let bundle = Bundle(url: url), let id = bundle.bundleIdentifier else { return nil }
+        return AppChoice(bundleIdentifier: id,
+                         name: AppInfo.name(forAppURL: url) ?? id,
+                         icon: NSWorkspace.shared.icon(forFile: url.path))
     }
 
-    private static func choice(forAppURL url: URL) -> AppChoice? {
-        guard let bundle = Bundle(url: url), let bundleIdentifier = bundle.bundleIdentifier else { return nil }
-        return AppChoice(
-            bundleIdentifier: bundleIdentifier,
-            name: AppDisplay.name(forAppURL: url) ?? bundleIdentifier,
-            url: url,
-            icon: NSWorkspace.shared.icon(forFile: url.path))
-    }
-
-    private static func dedup(_ choices: [AppChoice]) -> [AppChoice] {
-        var seen = Set<String>()
-        var result: [AppChoice] = []
-        for choice in choices where !seen.contains(choice.bundleIdentifier) {
-            seen.insert(choice.bundleIdentifier)
-            result.append(choice)
-        }
-        return result
-    }
-
-    private static func dockAppURLs() -> [URL] {
-        guard let apps = UserDefaults(suiteName: "com.apple.dock")?.array(forKey: "persistent-apps") else {
-            return []
-        }
+    private static func dockURLs() -> [URL] {
+        guard let apps = UserDefaults(suiteName: "com.apple.dock")?.array(forKey: "persistent-apps") else { return [] }
         return apps.compactMap { item in
-            guard let dict = item as? [String: Any],
-                  let tileData = dict["tile-data"] as? [String: Any],
-                  let fileData = tileData["file-data"] as? [String: Any],
-                  let raw = fileData["_CFURLString"] as? String,
-                  let url = URL(string: raw),
-                  url.isFileURL else { return nil }
+            guard let d = item as? [String: Any], let t = d["tile-data"] as? [String: Any],
+                  let f = t["file-data"] as? [String: Any], let raw = f["_CFURLString"] as? String,
+                  let url = URL(string: raw), url.isFileURL else { return nil }
             return url
         }
     }
+
+    private static func dedup(_ c: [AppChoice]) -> [AppChoice] {
+        var seen = Set<String>(); var out: [AppChoice] = []
+        for x in c where !seen.contains(x.bundleIdentifier) { seen.insert(x.bundleIdentifier); out.append(x) }
+        return out
+    }
+    private static func sortByName(_ c: [AppChoice]) -> [AppChoice] {
+        c.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 }
 
+// MARK: - Main view
+
 private final class BindingsSettingsView: NSView {
+    weak var hostWindow: NSWindow?
+
     private let ctx: SettingsContext
     private var drafts: [BindingDraft]
-    private var rowViews: [BindingRowView] = []
     private var recordingIndex: Int?
     private var monitor: Any?
-    private var pickerIndex: Int?
 
-    private let titleLabel = NSTextField(labelWithString: "App Shortcuts")
-    private let helpLabel = NSTextField(labelWithString:
-        "Choose an app, record a shortcut, then save. Esc cancels recording; bare Delete clears a shortcut.")
+    private let titleLabel = NSTextField(labelWithString: "Shortcuts")
+    private let subtitleLabel = NSTextField(labelWithString:
+        "Press a shortcut to jump to its app. Press it again to step through that app’s windows.")
+    private let listStack = NSStackView()
     private let scroll = NSScrollView()
     private let document = FlippedView()
-    private let rowStack = NSStackView()
-    private let emptyView = EmptyBindingsView()
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let addButton = NSButton(title: "Add Binding", target: nil, action: nil)
-    private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private let emptyView = EmptyView()
+    private let addButton = NSButton()
 
     init(context: SettingsContext) {
-        self.ctx = context
+        ctx = context
         drafts = context.config().bindings.map(BindingDraft.init(binding:))
         super.init(frame: .zero)
         build()
-        rebuildRows()
+        rebuild()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -238,45 +203,35 @@ private final class BindingsSettingsView: NSView {
         super.viewDidMoveToWindow()
         NotificationCenter.default.removeObserver(self)
         guard let w = window else { return }
-        for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
-            NotificationCenter.default.addObserver(self, selector: #selector(windowLeft), name: name, object: w)
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(windowLeft),
+                                               name: NSWindow.didResignKeyNotification, object: w)
     }
 
     private func build() {
-        translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        subtitleLabel.font = .systemFont(ofSize: 13)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        subtitleLabel.maximumNumberOfLines = 2
 
-        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
-        helpLabel.font = .systemFont(ofSize: 12)
-        helpLabel.textColor = .secondaryLabelColor
-        helpLabel.lineBreakMode = .byWordWrapping
-        helpLabel.maximumNumberOfLines = 2
+        let header = NSStackView(views: [titleLabel, subtitleLabel])
+        header.orientation = .vertical
+        header.alignment = .leading
+        header.spacing = 5
+        header.translatesAutoresizingMaskIntoConstraints = false
 
-        addButton.target = self
-        addButton.action = #selector(addBinding)
-        addButton.bezelStyle = .rounded
-
-        saveButton.target = self
-        saveButton.action = #selector(save)
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
-
-        statusLabel.font = .systemFont(ofSize: 12)
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.lineBreakMode = .byTruncatingTail
-
-        rowStack.orientation = .vertical
-        rowStack.alignment = .leading
-        rowStack.spacing = 10
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        listStack.orientation = .vertical
+        listStack.alignment = .leading
+        listStack.spacing = 8
+        listStack.translatesAutoresizingMaskIntoConstraints = false
 
         document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(rowStack)
+        document.addSubview(listStack)
         NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            rowStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            rowStack.topAnchor.constraint(equalTo: document.topAnchor),
-            rowStack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor),
+            listStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            listStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            listStack.topAnchor.constraint(equalTo: document.topAnchor),
+            listStack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor),
         ])
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -286,35 +241,33 @@ private final class BindingsSettingsView: NSView {
         scroll.documentView = document
 
         emptyView.translatesAutoresizingMaskIntoConstraints = false
-        emptyView.onAdd = { [weak self] in self?.addBinding() }
+        emptyView.onAdd = { [weak self] in self?.beginAddBinding() }
 
-        let headerStack = NSStackView(views: [titleLabel, helpLabel])
-        headerStack.orientation = .vertical
-        headerStack.alignment = .leading
-        headerStack.spacing = 4
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        addButton.title = "Add Shortcut"
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        addButton.imagePosition = .imageLeading
+        addButton.bezelStyle = .rounded
+        addButton.controlSize = .large
+        addButton.target = self
+        addButton.action = #selector(beginAddBinding)
+        addButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let footerStack = NSStackView(views: [statusLabel, addButton, saveButton])
-        footerStack.orientation = .horizontal
-        footerStack.alignment = .centerY
-        footerStack.spacing = 12
-        footerStack.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let footer = NSStackView(views: [addButton, NSView()])
+        footer.orientation = .horizontal
+        footer.distribution = .fill
+        footer.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(headerStack)
-        addSubview(scroll)
-        addSubview(emptyView)
-        addSubview(footerStack)
+        addSubview(header); addSubview(scroll); addSubview(emptyView); addSubview(footer)
 
         NSLayoutConstraint.activate([
-            headerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            headerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            headerStack.topAnchor.constraint(equalTo: topAnchor, constant: 24),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 26),
 
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
-            scroll.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 18),
-            scroll.bottomAnchor.constraint(equalTo: footerStack.topAnchor, constant: -16),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
+            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -16),
 
             document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
@@ -326,131 +279,74 @@ private final class BindingsSettingsView: NSView {
             emptyView.topAnchor.constraint(equalTo: scroll.topAnchor),
             emptyView.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
 
-            footerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            footerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            footerStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            footer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -22),
         ])
     }
 
-    private func rebuildRows() {
-        rowViews.forEach { $0.removeFromSuperview() }
-        rowViews.removeAll()
-        rowStack.arrangedSubviews.forEach { view in
-            rowStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
+    // MARK: List
+
+    private func rebuild() {
+        listStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         emptyView.isHidden = !drafts.isEmpty
         scroll.isHidden = drafts.isEmpty
         addButton.isHidden = drafts.isEmpty
-        saveButton.isEnabled = true // allow saving an empty list so removing the last binding persists
 
-        if drafts.isEmpty {
-            statusLabel.stringValue = "No bindings configured."
-            return
-        }
-
-        statusLabel.stringValue = "\(drafts.count) binding\(drafts.count == 1 ? "" : "s")"
         for (index, draft) in drafts.enumerated() {
             let row = BindingRowView()
             row.translatesAutoresizingMaskIntoConstraints = false
-            row.configure(draft: draft)
-            row.isRecording = index == recordingIndex
-            row.onChooseApp = { [weak self, weak row] source in
-                guard let row else { return }
-                self?.chooseApp(for: index, relativeTo: source, in: row)
-            }
+            row.configure(draft: draft, isRecording: index == recordingIndex)
             row.onRecord = { [weak self] in self?.toggleRecording(index) }
             row.onRemove = { [weak self] in self?.removeBinding(index) }
-            rowStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
-            rowViews.append(row)
-
-            if pickerIndex == index {
-                let openNow = AppChoices.openNow()
-                let picker = AppPickerView(
-                    openNow: openNow,
-                    dockApps: AppChoices.inDock(excluding: Set(openNow.map(\.bundleIdentifier))),
-                    onSelect: { [weak self] choice in
-                        guard let self, self.drafts.indices.contains(index) else { return }
-                        self.drafts[index].bundleIdentifier = choice.bundleIdentifier
-                        self.drafts[index].appName = choice.name
-                        self.pickerIndex = nil
-                        self.rebuildRows()
-                    },
-                    onBrowse: { [weak self] in
-                        guard let self else { return }
-                        self.pickerIndex = nil
-                        self.browseApp(for: index)
-                    })
-                picker.translatesAutoresizingMaskIntoConstraints = false
-                rowStack.addArrangedSubview(picker)
-                picker.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
-            }
+            listStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: listStack.widthAnchor).isActive = true
         }
         document.layoutSubtreeIfNeeded()
     }
 
-    @objc private func addBinding() {
+    /// Write only complete bindings (app + shortcut) and live-reload hotkeys. Native apps apply
+    /// immediately; an incomplete row stays visible until its shortcut is recorded.
+    private func apply() {
+        let config = CyclerConfig(bindings: drafts.compactMap(\.binding))
+        do { try ctx.saveConfig(config) }
+        catch { presentError("Couldn’t save your shortcuts.", error.localizedDescription) }
+    }
+
+    // MARK: Add / remove / pick
+
+    @objc private func beginAddBinding() {
         stopRecording()
-        drafts.append(BindingDraft())
-        pickerIndex = drafts.count - 1
-        rebuildRows()
-        statusLabel.stringValue = "Choose an app and record a shortcut."
+        guard let host = hostWindow else { return }
+        let bound = Set(drafts.map(\.bundleIdentifier))
+        let picker = AppPickerSheet(excluding: bound) { [weak self] choice in
+            guard let self, let choice else { return }
+            self.drafts.append(BindingDraft(bundleIdentifier: choice.bundleIdentifier, appName: choice.name))
+            self.rebuild()
+            // Jump straight into recording the new row's shortcut.
+            self.toggleRecording(self.drafts.count - 1)
+        }
+        picker.present(in: host)
     }
 
     private func removeBinding(_ index: Int) {
         guard drafts.indices.contains(index) else { return }
         stopRecording()
         drafts.remove(at: index)
-        pickerIndex = nil
-        rebuildRows()
+        rebuild()
+        apply()
     }
 
-    private func chooseApp(for index: Int, relativeTo source: NSView, in row: BindingRowView) {
-        guard drafts.indices.contains(index) else { return }
-        stopRecording()
-        pickerIndex = (pickerIndex == index) ? nil : index
-        rebuildRows()
-        row.markPickerOpen()
-    }
-
-    private func browseApp(for index: Int) {
-        guard drafts.indices.contains(index) else { return }
-        let panel = NSOpenPanel()
-        panel.title = "Choose App"
-        panel.prompt = "Choose"
-        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.applicationBundle]
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard let bundle = Bundle(url: url), let bundleIdentifier = bundle.bundleIdentifier else {
-            showAlert(message: "That app has no bundle identifier",
-                      info: "Choose a normal macOS application bundle.")
-            return
-        }
-        drafts[index].bundleIdentifier = bundleIdentifier
-        drafts[index].appName = AppDisplay.name(forAppURL: url) ?? bundleIdentifier
-        rebuildRows()
-    }
+    // MARK: Recording
 
     private func toggleRecording(_ index: Int) {
         guard drafts.indices.contains(index) else { return }
-        if recordingIndex == index {
-            stopRecording()
-        } else {
-            startRecording(index)
-        }
+        if recordingIndex == index { stopRecording() } else { startRecording(index) }
     }
 
     private func startRecording(_ index: Int) {
-        guard window?.isKeyWindow == true else {
-            window?.makeKeyAndOrderFront(nil)
-            return
-        }
+        guard window?.isKeyWindow == true else { window?.makeKeyAndOrderFront(nil); return }
         if recordingIndex != nil { stopRecording() }
         recordingIndex = index
         ctx.setRecording(true)
@@ -459,497 +355,407 @@ private final class BindingsSettingsView: NSView {
                 self?.handle(event) == true ? nil : event
             }
         }
-        rebuildRows()
-        window?.makeFirstResponder(self)
-    }
-
-    @objc private func windowLeft() {
-        stopRecording()
-    }
-
-    func closeTransientUI() {
-        pickerIndex = nil
-        rebuildRows()
-    }
-
-    /// Resync drafts from the current on-disk config. Called on every Settings open so a reused
-    /// controller never shows stale drafts or overwrites edits made via Reload bindings / the JSON.
-    func reloadFromConfig() {
-        stopRecording()
-        pickerIndex = nil
-        drafts = ctx.config().bindings.map(BindingDraft.init(binding:))
-        rebuildRows()
+        rebuild()
     }
 
     func stopRecording() {
-        let wasRecording = recordingIndex != nil
+        let was = recordingIndex != nil
         recordingIndex = nil
-        if let m = monitor {
-            NSEvent.removeMonitor(m)
-            monitor = nil
-        }
-        if wasRecording { ctx.setRecording(false) }
-        rebuildRows()
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        if was { ctx.setRecording(false) }
+        rebuild()
+    }
+
+    @objc private func windowLeft() { stopRecording() }
+
+    func reloadFromConfig() {
+        stopRecording()
+        drafts = ctx.config().bindings.map(BindingDraft.init(binding:))
+        rebuild()
     }
 
     private func handle(_ event: NSEvent) -> Bool {
         guard let index = recordingIndex, drafts.indices.contains(index) else { return false }
         let keyCode = Int(event.keyCode)
         let bare = !ShortcutKit.hasModifier(event.modifierFlags)
-        if keyCode == kVK_Escape, bare {
-            stopRecording()
-            return true
-        }
+        if keyCode == kVK_Escape, bare { stopRecording(); return true }
         if keyCode == kVK_Delete, bare {
-            drafts[index].keyCode = nil
-            drafts[index].modifiers = nil
-            stopRecording()
-            return true
+            drafts[index].keyCode = nil; drafts[index].modifiers = nil
+            stopRecording(); apply(); return true
         }
-        guard ShortcutKit.hasModifier(event.modifierFlags) else {
-            NSSound.beep()
-            return true
-        }
+        guard ShortcutKit.hasModifier(event.modifierFlags) else { NSSound.beep(); return true }
 
         let modifiers = ShortcutKit.carbonModifiers(from: event.modifierFlags)
-        stopRecording()
-
-        let conflicts = drafts.indices.filter { other in
-            other != index &&
-                drafts[other].keyCode == keyCode &&
-                drafts[other].modifiers == modifiers
-        }
-        if !conflicts.isEmpty, !confirmConflict(conflicts) {
+        // Reject a duplicate shortcut: no two apps may share a combo.
+        if let other = drafts.indices.first(where: { i in
+            i != index && drafts[i].keyCode == keyCode && drafts[i].modifiers == modifiers
+        }) {
+            stopRecording()
+            NSSound.beep()
+            presentError("That shortcut is taken.",
+                         "\(ShortcutKit.display(keyCode: keyCode, modifiers: modifiers)) is already used by \(drafts[other].appName). Pick a different one.")
             return true
-        }
-        for conflict in conflicts {
-            drafts[conflict].keyCode = nil
-            drafts[conflict].modifiers = nil
         }
         drafts[index].keyCode = keyCode
         drafts[index].modifiers = modifiers
-        rebuildRows()
+        stopRecording()
+        apply()
         return true
     }
 
-    private func confirmConflict(_ conflicts: [Int]) -> Bool {
-        let names = conflicts.map { drafts[$0].appName.isEmpty ? "another row" : drafts[$0].appName }
-        let alert = NSAlert()
-        alert.messageText = "Shortcut already in use"
-        alert.informativeText = "This combo is assigned to \(names.joined(separator: ", ")). Reassign it here?"
-        alert.addButton(withTitle: "Reassign")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    @objc private func save() {
-        stopRecording()
-        guard drafts.allSatisfy(\.isComplete) else {
-            showAlert(message: "Finish each binding before saving",
-                      info: "Every row needs both an app and a shortcut. Remove unused rows or complete them.")
-            return
-        }
-        let config = CyclerConfig(bindings: drafts.compactMap { $0.binding() })
-        do {
-            try ctx.saveConfig(config)
-            statusLabel.stringValue = "Saved to ~/.config/cycler/bindings.json"
-        } catch {
-            showAlert(message: "Bindings could not be saved", info: error.localizedDescription)
-        }
-    }
-
-    private func showAlert(message: String, info: String) {
+    private func presentError(_ message: String, _ info: String) {
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = info
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        if let host = hostWindow { alert.beginSheetModal(for: host) } else { alert.runModal() }
     }
 }
 
-private final class EmptyBindingsView: NSView {
-    var onAdd: () -> Void = {}
-    private let title = NSTextField(labelWithString: "No bindings yet")
-    private let message = NSTextField(labelWithString: "Add an app shortcut to jump to an app, then press it again to cycle that app's windows.")
-    private let addButton = NSButton(title: "Add Binding", target: nil, action: nil)
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        build()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func build() {
-        title.font = .systemFont(ofSize: 18, weight: .semibold)
-        title.alignment = .center
-        message.font = .systemFont(ofSize: 13)
-        message.textColor = .secondaryLabelColor
-        message.alignment = .center
-        message.maximumNumberOfLines = 2
-        message.lineBreakMode = .byWordWrapping
-        addButton.target = self
-        addButton.action = #selector(add)
-        addButton.bezelStyle = .rounded
-
-        let stack = NSStackView(views: [title, message, addButton])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 40),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -40),
-            message.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
-        ])
-    }
-
-    @objc private func add() { onAdd() }
-}
+// MARK: - Row
 
 private final class BindingRowView: NSView {
-    var onChooseApp: (NSView) -> Void = { _ in }
     var onRecord: () -> Void = {}
     var onRemove: () -> Void = {}
 
     private let iconView = NSImageView()
-    private let appButton = NSButton(title: "", target: nil, action: nil)
-    private let bundleLabel = NSTextField(labelWithString: "")
+    private let nameLabel = NSTextField(labelWithString: "")
     private let recorder = RecorderField()
-    private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let removeButton = NSButton()
 
-    var isRecording = false {
-        didSet { recorder.isRecording = isRecording }
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        build()
-    }
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); build() }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(draft: BindingDraft) {
-        appButton.title = draft.appName.isEmpty ? "Choose App..." : draft.appName
-        appButton.setAccessibilityTitle(appButton.title)
-        appButton.setAccessibilityLabel(appButton.title)
-        bundleLabel.stringValue = draft.bundleIdentifier ?? "No app selected"
+    func configure(draft: BindingDraft, isRecording: Bool) {
+        nameLabel.stringValue = draft.appName
         recorder.text = draft.shortcutText
-        recorder.actionLabel = draft.appName.isEmpty ? "Binding" : draft.appName
-        if let bundleIdentifier = draft.bundleIdentifier,
-           let icon = AppDisplay.icon(forBundleIdentifier: bundleIdentifier) {
-            iconView.image = icon
-        } else {
-            iconView.image = NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)
-        }
-    }
-
-    func markPickerOpen() {
-        appButton.highlight(true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.appButton.highlight(false) }
+        recorder.isRecording = isRecording
+        recorder.appName = draft.appName
+        iconView.image = AppInfo.icon(forBundleIdentifier: draft.bundleIdentifier)
+            ?? NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)
     }
 
     private func build() {
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 10
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.55).cgColor
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.7).cgColor
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.4).cgColor
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
 
-        appButton.target = self
-        appButton.action = #selector(chooseApp)
-        appButton.bezelStyle = .rounded
-        appButton.alignment = .left
-
-        bundleLabel.font = .systemFont(ofSize: 11)
-        bundleLabel.textColor = .secondaryLabelColor
-        bundleLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         recorder.onClick = { [weak self] in self?.onRecord() }
 
+        removeButton.image = NSImage(systemSymbolName: "minus.circle.fill", accessibilityDescription: "Remove")
+        removeButton.imageScaling = .scaleProportionallyDown
+        removeButton.isBordered = false
+        removeButton.bezelStyle = .regularSquare
+        removeButton.contentTintColor = .tertiaryLabelColor
         removeButton.target = self
         removeButton.action = #selector(remove)
-        removeButton.bezelStyle = .rounded
-        removeButton.setAccessibilityTitle("Remove")
-        removeButton.setAccessibilityLabel("Remove")
+        removeButton.toolTip = "Remove"
+        removeButton.setAccessibilityLabel("Remove shortcut for \(nameLabel.stringValue)")
+        removeButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let appTextStack = NSStackView(views: [appButton, bundleLabel])
-        appTextStack.orientation = .vertical
-        appTextStack.alignment = .leading
-        appTextStack.spacing = 3
-
-        let appStack = NSStackView(views: [iconView, appTextStack])
-        appStack.orientation = .horizontal
-        appStack.alignment = .centerY
-        appStack.spacing = 10
-
-        let stack = NSStackView(views: [appStack, recorder, removeButton])
+        let stack = NSStackView(views: [iconView, nameLabel, recorder, removeButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 16
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
-        appStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        recorder.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        removeButton.setContentHuggingPriority(.required, for: .horizontal)
-
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            heightAnchor.constraint(equalToConstant: 60),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            iconView.widthAnchor.constraint(equalToConstant: 36),
-            iconView.heightAnchor.constraint(equalToConstant: 36),
-            appTextStack.widthAnchor.constraint(greaterThanOrEqualToConstant: 210),
-            recorder.widthAnchor.constraint(equalToConstant: 190),
-            recorder.heightAnchor.constraint(equalToConstant: 32),
+            iconView.widthAnchor.constraint(equalToConstant: 30),
+            iconView.heightAnchor.constraint(equalToConstant: 30),
+            recorder.widthAnchor.constraint(equalToConstant: 168),
+            recorder.heightAnchor.constraint(equalToConstant: 30),
+            removeButton.widthAnchor.constraint(equalToConstant: 22),
+            removeButton.heightAnchor.constraint(equalToConstant: 22),
         ])
     }
 
-    @objc private func chooseApp() { onChooseApp(appButton) }
     @objc private func remove() { onRemove() }
 }
 
-private final class AppPickerView: NSView, NSSearchFieldDelegate {
-    private let openNow: [AppChoice]
-    private let dockApps: [AppChoice]
-    private let onSelect: (AppChoice) -> Void
-    private let onBrowse: () -> Void
-
-    private let searchField = NSSearchField()
-    private let scroll = NSScrollView()
-    private let document = FlippedView()
-    private let stack = NSStackView()
-
-    init(openNow: [AppChoice], dockApps: [AppChoice],
-         onSelect: @escaping (AppChoice) -> Void, onBrowse: @escaping () -> Void) {
-        self.openNow = openNow
-        self.dockApps = dockApps
-        self.onSelect = onSelect
-        self.onBrowse = onBrowse
-        super.init(frame: .zero)
-        build()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func build() {
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-
-        searchField.placeholderString = "Search suggested apps"
-        searchField.delegate = self
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(stack)
-
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true
-        scroll.documentView = document
-
-        let browse = NSButton(title: "Browse...", target: self, action: #selector(browse))
-        browse.bezelStyle = .rounded
-        browse.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(searchField)
-        addSubview(scroll)
-        addSubview(browse)
-
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 260),
-
-            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            searchField.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
-            scroll.bottomAnchor.constraint(equalTo: browse.topAnchor, constant: -10),
-
-            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
-            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-
-            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 4),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor),
-
-            browse.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            browse.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-        ])
-
-        rebuild()
-    }
-
-    func controlTextDidChange(_ obj: Notification) {
-        rebuild()
-    }
-
-    @objc private func searchChanged() {
-        rebuild()
-    }
-
-    private func rebuild() {
-        stack.arrangedSubviews.forEach { view in
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filteredOpenNow = filter(openNow, query: query)
-        let filteredDockApps = filter(dockApps, query: query)
-
-        addSection("Open now", choices: filteredOpenNow)
-        addSection("In your Dock", choices: filteredDockApps)
-        if filteredOpenNow.isEmpty && filteredDockApps.isEmpty {
-            let empty = NSTextField(labelWithString: query.isEmpty ? "No suggested apps found." : "No matching apps.")
-            empty.font = .systemFont(ofSize: 12)
-            empty.textColor = .secondaryLabelColor
-            stack.addArrangedSubview(empty)
-        }
-        document.layoutSubtreeIfNeeded()
-    }
-
-    private func filter(_ choices: [AppChoice], query: String) -> [AppChoice] {
-        guard !query.isEmpty else { return choices }
-        return choices.filter {
-            $0.name.localizedCaseInsensitiveContains(query) ||
-                $0.bundleIdentifier.localizedCaseInsensitiveContains(query)
-        }
-    }
-
-    private func addSection(_ title: String, choices: [AppChoice]) {
-        guard !choices.isEmpty else { return }
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
-        label.textColor = .secondaryLabelColor
-        stack.addArrangedSubview(label)
-
-        for choice in choices {
-            let button = AppChoiceButton(choice: choice, target: self, action: #selector(select(_:)))
-            stack.addArrangedSubview(button)
-            button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-    }
-
-    @objc private func select(_ sender: AppChoiceButton) {
-        onSelect(sender.choice)
-    }
-
-    @objc private func browse() {
-        onBrowse()
-    }
-}
-
-private final class AppChoiceButton: NSButton {
-    let choice: AppChoice
-
-    init(choice: AppChoice, target: AnyObject?, action: Selector) {
-        self.choice = choice
-        super.init(frame: .zero)
-        self.target = target
-        self.action = action
-        title = choice.name
-        image = choice.icon
-        imagePosition = .imageLeft
-        imageScaling = .scaleProportionallyUpOrDown
-        alignment = .left
-        bezelStyle = .regularSquare
-        isBordered = false
-        setButtonType(.momentaryChange)
-        toolTip = choice.bundleIdentifier
-        setAccessibilityTitle(choice.name)
-        setAccessibilityLabel(choice.name)
-        setAccessibilityHelp(choice.bundleIdentifier)
-        translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 36).isActive = true
-    }
-    required init?(coder: NSCoder) { fatalError() }
-}
+// MARK: - Recorder
 
 private final class RecorderField: NSView {
     var onClick: () -> Void = {}
     var isRecording = false { didSet { needsDisplay = true } }
     var text = "" { didSet { needsDisplay = true } }
-    var enabled = true { didSet { needsDisplay = true } }
-    var actionLabel = ""
+    var appName = ""
 
     override var isFlipped: Bool { true }
 
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
-    override func isAccessibilityEnabled() -> Bool { enabled }
     override func accessibilityLabel() -> String? {
-        if isRecording { return "\(actionLabel) shortcut, recording, press a key combination" }
-        return "\(actionLabel) shortcut, \(text.isEmpty ? "not set" : text)"
+        if isRecording { return "Recording shortcut for \(appName). Press a key combination." }
+        return "Shortcut for \(appName), \(text.isEmpty ? "not set" : text)"
     }
-    override func accessibilityPerformPress() -> Bool {
-        guard enabled else { return false }
-        onClick()
-        return true
-    }
+    override func accessibilityPerformPress() -> Bool { onClick(); return true }
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 1, dy: 1)
         let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
-        (isRecording ? Brand.blue.withAlphaComponent(0.12) : NSColor.textBackgroundColor).setFill()
+        (isRecording ? Brand.blue.withAlphaComponent(0.14) : NSColor.textBackgroundColor.withAlphaComponent(0.6)).setFill()
         path.fill()
         (isRecording ? Brand.blue : NSColor.separatorColor).setStroke()
         path.lineWidth = isRecording ? 2 : 1
         path.stroke()
 
-        let str: String
-        let color: NSColor
-        let weight: NSFont.Weight
-        if isRecording {
-            str = "Press keys..."
-            color = Brand.blue
-            weight = .regular
-        } else if text.isEmpty {
-            str = "Click to record"
-            color = .secondaryLabelColor
-            weight = .regular
-        } else {
-            str = text
-            color = enabled ? .labelColor : .disabledControlTextColor
-            weight = .medium
-        }
+        let str: String, color: NSColor, weight: NSFont.Weight
+        if isRecording { str = "Press keys…"; color = Brand.blue; weight = .regular }
+        else if text.isEmpty { str = "Record shortcut"; color = .secondaryLabelColor; weight = .regular }
+        else { str = text; color = .labelColor; weight = .semibold }
+
         let s = NSAttributedString(string: str, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: weight),
-            .foregroundColor: color,
+            .font: NSFont.systemFont(ofSize: 13, weight: weight), .foregroundColor: color,
         ])
         let sz = s.size()
         s.draw(at: NSPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2))
     }
 
-    override func mouseDown(with event: NSEvent) {
-        if enabled { onClick() }
+    override func mouseDown(with event: NSEvent) { onClick() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+// MARK: - Empty state
+
+private final class EmptyView: NSView {
+    var onAdd: () -> Void = {}
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); build() }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func build() {
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "command", accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 40, weight: .regular)
+        icon.contentTintColor = .tertiaryLabelColor
+
+        let title = NSTextField(labelWithString: "No shortcuts yet")
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.alignment = .center
+
+        let message = NSTextField(labelWithString:
+            "Add a shortcut for an app to jump to it, then press it again to cycle that app’s windows.")
+        message.font = .systemFont(ofSize: 13)
+        message.textColor = .secondaryLabelColor
+        message.alignment = .center
+        message.maximumNumberOfLines = 2
+        message.lineBreakMode = .byWordWrapping
+
+        let add = NSButton(title: "Add Shortcut", target: self, action: #selector(addTapped))
+        add.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        add.imagePosition = .imageLeading
+        add.bezelStyle = .rounded
+        add.controlSize = .large
+        add.keyEquivalent = "\r"
+
+        let stack = NSStackView(views: [icon, title, message, add])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 12
+        stack.setCustomSpacing(18, after: message)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            message.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+        ])
+    }
+    @objc private func addTapped() { onAdd() }
+}
+
+// MARK: - App picker sheet
+
+private final class AppPickerSheet: NSObject, NSSearchFieldDelegate {
+    private let excluded: Set<String>
+    private let completion: (AppChoice?) -> Void
+    private var sheet: NSWindow?
+
+    private let searchField = NSSearchField()
+    private let scroll = NSScrollView()
+    private let document = FlippedView()
+    private let stack = NSStackView()
+    private let openNow: [AppChoice]
+    private let dock: [AppChoice]
+
+    init(excluding: Set<String>, completion: @escaping (AppChoice?) -> Void) {
+        self.excluded = excluding
+        self.completion = completion
+        openNow = AppCatalog.openNow().filter { !excluding.contains($0.bundleIdentifier) }
+        let openIDs = Set(openNow.map(\.bundleIdentifier))
+        dock = AppCatalog.inDock().filter { !excluding.contains($0.bundleIdentifier) && !openIDs.contains($0.bundleIdentifier) }
+        super.init()
     }
 
-    override func resetCursorRects() {
-        if enabled { addCursorRect(bounds, cursor: .pointingHand) }
+    func present(in host: NSWindow) {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 460))
+
+        let heading = NSTextField(labelWithString: "Choose an App")
+        heading.font = .systemFont(ofSize: 15, weight: .semibold)
+        heading.translatesAutoresizingMaskIntoConstraints = false
+
+        searchField.placeholderString = "Search apps"
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(stack)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.borderType = .bezelBorder
+        scroll.hasVerticalScroller = true
+        scroll.documentView = document
+
+        let browse = NSButton(title: "Browse…", target: self, action: #selector(browse))
+        browse.bezelStyle = .rounded
+        browse.translatesAutoresizingMaskIntoConstraints = false
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
+        cancel.translatesAutoresizingMaskIntoConstraints = false
+
+        [heading, searchField, scroll, browse, cancel].forEach(root.addSubview)
+        NSLayoutConstraint.activate([
+            heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
+            heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+
+            searchField.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 12),
+            searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+
+            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 12),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            scroll.bottomAnchor.constraint(equalTo: browse.topAnchor, constant: -14),
+
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -6),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 6),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -6),
+
+            cancel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            cancel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            browse.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            browse.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+        ])
+
+        let sheetWindow = NSWindow(contentRect: root.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        sheetWindow.contentView = root
+        sheet = sheetWindow
+        rebuild()
+        host.beginSheet(sheetWindow, completionHandler: nil)
+        sheetWindow.makeFirstResponder(searchField)
     }
+
+    func controlTextDidChange(_ obj: Notification) { rebuild() }
+
+    private func rebuild() {
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let q = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let on = openNow.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
+        let dk = dock.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
+        addSection("Open Now", on)
+        addSection("In Your Dock", dk)
+        if on.isEmpty && dk.isEmpty {
+            let empty = NSTextField(labelWithString: q.isEmpty ? "No apps available." : "No matches.")
+            empty.font = .systemFont(ofSize: 12); empty.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(empty)
+        }
+        document.layoutSubtreeIfNeeded()
+    }
+
+    private func addSection(_ title: String, _ choices: [AppChoice]) {
+        guard !choices.isEmpty else { return }
+        let label = NSTextField(labelWithString: title.uppercased())
+        label.font = .systemFont(ofSize: 10, weight: .semibold)
+        label.textColor = .tertiaryLabelColor
+        let wrap = NSView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        wrap.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 6),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -3),
+        ])
+        stack.addArrangedSubview(wrap)
+        wrap.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        for choice in choices {
+            let btn = AppRow(choice: choice, target: self, action: #selector(pick(_:)))
+            stack.addArrangedSubview(btn)
+            btn.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
+
+    @objc private func pick(_ sender: AppRow) { finish(sender.choice) }
+    @objc private func cancel() { finish(nil) }
+
+    @objc private func browse() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.canChooseFiles = true; panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.applicationBundle]
+        guard let host = sheet else { return }
+        panel.beginSheetModal(for: host) { [weak self] resp in
+            guard let self else { return }
+            guard resp == .OK, let url = panel.url, let choice = AppCatalog.choice(forURL: url) else { return }
+            if self.excluded.contains(choice.bundleIdentifier) { self.finish(nil); return }
+            self.finish(choice)
+        }
+    }
+
+    private func finish(_ choice: AppChoice?) {
+        if let sheet, let parent = sheet.sheetParent { parent.endSheet(sheet) }
+        sheet = nil
+        completion(choice)
+    }
+}
+
+private final class AppRow: NSButton {
+    let choice: AppChoice
+    init(choice: AppChoice, target: AnyObject?, action: Selector) {
+        self.choice = choice
+        super.init(frame: .zero)
+        self.target = target; self.action = action
+        title = "  " + choice.name
+        image = choice.icon
+        image?.size = NSSize(width: 22, height: 22)
+        imagePosition = .imageLeading
+        imageScaling = .scaleProportionallyDown
+        alignment = .left
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        contentTintColor = .labelColor
+        font = .systemFont(ofSize: 13)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 34).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 private final class FlippedView: NSView {

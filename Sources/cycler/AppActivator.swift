@@ -37,16 +37,17 @@ final class AppActivator {
         let windows = Self.windows(of: axApp)
         let alreadyFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier
 
-        guard !windows.isEmpty else {
-            // App with no AX windows (e.g. only a menu-bar presence): just activate it.
-            Self.activate(app)
-            return
-        }
-
         if !alreadyFront {
             // First press: go to the app. Focus its current main window (don't advance).
             Self.activate(app)
             if let mainIdx = Self.indexOfMain(in: windows) { lastIndex[bundleIdentifier] = mainIdx }
+            return
+        }
+
+        guard windows.count >= 2 else {
+            // With nothing to cycle, repeat presses become a show/hide toggle.
+            app.hide()
+            lastIndex.removeValue(forKey: bundleIdentifier)
             return
         }
 
@@ -58,11 +59,12 @@ final class AppActivator {
         Self.raise(targetWindow)
         Self.activate(app)
         lastIndex[bundleIdentifier] = nextIdx
+        let titles = windows.map { Self.title(of: $0.element) }
         CycleHUD.shared.show(
             appIcon: app.icon,
-            title: Self.title(of: targetWindow),
-            index: nextIdx,
-            count: windows.count)
+            appName: app.localizedName ?? "",
+            windowTitles: titles,
+            selectedIndex: nextIdx)
     }
 
     // MARK: - AX helpers
