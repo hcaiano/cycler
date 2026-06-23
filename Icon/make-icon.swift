@@ -1,23 +1,24 @@
 import AppKit
 
-// Materializes the canonical Cycler icon artwork as a normalized 1024x1024 PNG.
-// The artwork is supplied by design, not generated programmatically here.
+// Produces the 1024x1024 macOS app-icon master from the canonical Cycler artwork.
+//
+// The supplied artwork is already a finished icon (a gradient rounded-rect "squircle" with the
+// white C, on transparency). We simply scale it to fill the 1024 canvas — no cropping, no padding,
+// no halo removal — so the icon fills its cell the way stock macOS app icons do.
 //
 // Usage:
-//   swift Icon/make-icon.swift Icon/icon-1024.png
-//   swift Icon/make-icon.swift Icon/icon-1024.png Icon/cycler-final-logo-1024-transparent-2026-06-23.png
+//   swift Icon/make-icon.swift Icon/icon-1024.png [source.png]
 let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Icon/icon-1024.png"
-let sourcePath = CommandLine.arguments.count > 2
-    ? CommandLine.arguments[2]
-    : "Icon/cycler-final-logo-1024-transparent-2026-06-23.png"
+let defaultSource = "Icon/cycler-final-logo-1024-transparent-2026-06-23.png"
+let sourcePath = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : defaultSource
 
 guard let source = NSImage(contentsOfFile: sourcePath) else {
-    FileHandle.standardError.write(Data("missing icon source: \(sourcePath)\n".utf8))
+    FileHandle.standardError.write(Data("missing or unreadable icon source: \(sourcePath)\n".utf8))
     exit(1)
 }
 
-let size = NSSize(width: 1024, height: 1024)
-let image = NSImage(size: size, flipped: false) { rect in
+let canvas = NSSize(width: 1024, height: 1024)
+let image = NSImage(size: canvas, flipped: false) { rect in
     NSColor.clear.setFill()
     rect.fill()
     source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
@@ -32,4 +33,4 @@ guard let tiff = image.tiffRepresentation,
 }
 
 try data.write(to: URL(fileURLWithPath: outPath))
-print("wrote \(outPath)")
+print("wrote \(outPath) (1024x1024, scaled to fill)")
