@@ -139,6 +139,9 @@ final class AppActivator {
     }
 
     private static func activate(_ app: NSRunningApplication) {
+        // A hidden app must be un-hidden first — activate() alone leaves it hidden, which is why a
+        // single-window app toggled off with hide() never came back.
+        if app.isHidden { app.unhide() }
         app.activate(options: [.activateAllWindows])
     }
 
