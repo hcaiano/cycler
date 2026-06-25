@@ -39,8 +39,21 @@ final class AppActivator {
 
         if !alreadyFront {
             // First press: go to the app. Focus its current main window (don't advance).
+            if windows.isEmpty, let minimizedWindow = Self.firstMinimizedWindow(of: axApp) {
+                Self.raise(minimizedWindow)
+                Self.activate(app)
+                lastIndex.removeValue(forKey: bundleIdentifier)
+                return
+            }
             Self.activate(app)
             if let mainIdx = Self.indexOfMain(in: windows) { lastIndex[bundleIdentifier] = mainIdx }
+            return
+        }
+
+        if windows.isEmpty, let minimizedWindow = Self.firstMinimizedWindow(of: axApp) {
+            Self.raise(minimizedWindow)
+            Self.activate(app)
+            lastIndex.removeValue(forKey: bundleIdentifier)
             return
         }
 
@@ -85,6 +98,13 @@ final class AppActivator {
                 return WindowRecord(element: window, windowID: windowID)
             }
             .sorted { lhs, rhs in lhs.windowID < rhs.windowID }
+    }
+
+    private static func firstMinimizedWindow(of axApp: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return nil }
+        return windows.first { isStandardWindow($0) && isMinimized($0) }
     }
 
     private static func isStandardWindow(_ window: AXUIElement) -> Bool {
@@ -133,6 +153,9 @@ final class AppActivator {
 
     /// Raise a window and make it the app's main/focused window.
     private static func raise(_ window: AXUIElement) {
+        if isMinimized(window) {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
