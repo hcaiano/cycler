@@ -170,6 +170,16 @@ h1 {
 .ring .dot.is-active { border-color: var(--brand); background: var(--brand-tint); }
 .ring-arrow { font-size: 52px; color: var(--brand); line-height: 1; }
 
+/* grouped apps */
+.group-flow { display: inline-flex; align-items: center; gap: var(--sp-5); }
+.flow-arrow { color: var(--muted); font-size: 28px; line-height: 1; }
+.app-strip { display: inline-flex; align-items: center; gap: var(--sp-3); }
+.app-square {
+  width: 38px; height: 38px; border-radius: 9px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.app-square.is-active { border-color: var(--brand); background: var(--brand-tint); }
+
 /* reverse (flat) */
 .rev { display: inline-flex; align-items: center; gap: var(--sp-4); }
 .rev-key { font-weight: 700; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
@@ -201,6 +211,9 @@ h1 {
 @media (max-width: 460px) {
   .header-actions .ghlink { display: none; }
   .stage { height: 220px; }
+  .group-flow { gap: var(--sp-3); }
+  .app-strip { gap: var(--sp-2); }
+  .app-square { width: 32px; height: 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

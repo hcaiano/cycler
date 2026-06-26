@@ -1,15 +1,18 @@
 # Cycler
 
-A tiny macOS menu-bar utility: **bind a hotkey to an app — press it to jump there, press
+A tiny macOS menu-bar utility: **bind a hotkey to an app, press it to jump there, press
 again to walk through that app's windows.**
 
 First press of `Hyper + 1` (say, bound to Chrome) brings Chrome to the front. Press it again
 and Cycler steps to Chrome's next window, then the next, wrapping around. No Dock hunting, no
 Mission Control. It lives in the menu bar and stays out of the way.
 
-> **Status: v0.3 feature surface.** The full pipeline (build, sign, notarize, auto-update,
-> website, CI) is wired, and Settings now supports single-app shortcuts, app groups, window
-> cycling, and compact HUDs. See [HANDOFF.md](HANDOFF.md) for what's done and what's next.
+You can also bind one key to several apps. The same press then steps between those apps in the
+order you set, instead of one app's windows. While you cycle, a small HUD shows where you are.
+For Chrome and other Chromium browsers, it puts the profile first so you can tell Work from
+Personal.
+
+Cycler is signed, notarized, and updates itself with Sparkle.
 
 ## Requirements
 
