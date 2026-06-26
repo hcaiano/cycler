@@ -70,29 +70,55 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 // MARK: - Model
 
 final class SettingsModel: ObservableObject {
-    struct Row: Identifiable {
-        let id = UUID()
+    struct AppEntry: Identifiable, Equatable {
         var bundleIdentifier: String
         var name: String
         var icon: NSImage?
+        var installed: Bool
+        var id: String { bundleIdentifier }
+    }
+
+    struct Row: Identifiable {
+        let id = UUID()
+        var apps: [AppEntry]
         var keyCode: Int?
         var modifiers: UInt32?
 
+        var isGroup: Bool { apps.count > 1 }
+        var missingCount: Int { apps.filter { !$0.installed }.count }
+        var title: String {
+            guard !apps.isEmpty else { return "Empty Shortcut" }
+            if apps.count <= 2 { return apps.map(\.name).joined(separator: " + ") }
+            return "\(apps[0].name) + \(apps[1].name) + \(apps.count - 2) more"
+        }
+        var detailText: String {
+            if missingCount > 0 {
+                return missingCount == 1 ? "1 app not installed" : "\(missingCount) apps not installed"
+            }
+            return isGroup ? "First app launches when none are running" : "Cycles windows"
+        }
         var shortcutText: String {
             guard let keyCode, let modifiers else { return "" }
             return ShortcutKit.display(keyCode: keyCode, modifiers: modifiers)
         }
         var binding: AppBinding? {
-            guard let keyCode, let modifiers else { return nil }
-            return AppBinding(keyCode: keyCode, modifiers: modifiers, bundleIdentifier: bundleIdentifier)
+            guard let keyCode, let modifiers, !apps.isEmpty else { return nil }
+            return AppBinding(
+                keyCode: keyCode,
+                modifiers: modifiers,
+                bundleIdentifiers: apps.map(\.bundleIdentifier))
         }
     }
 
     struct AlertItem: Identifiable { let id = UUID(); let title: String; let message: String }
+    struct PickerRequest: Identifiable {
+        let id = UUID()
+        var targetRowID: UUID?
+    }
 
     @Published var rows: [Row] = []
     @Published var recordingID: UUID?
-    @Published var showPicker = false
+    @Published var pickerRequest: PickerRequest?
     @Published var alert: AlertItem?
 
     private let ctx: SettingsContext
@@ -103,28 +129,74 @@ final class SettingsModel: ObservableObject {
         reload()
     }
 
-    var boundIdentifiers: Set<String> { Set(rows.map(\.bundleIdentifier)) }
+    var boundIdentifiers: Set<String> {
+        Set(rows.flatMap { row in row.apps.map(\.bundleIdentifier) })
+    }
 
     func reload() {
         stopRecording()
         rows = ctx.config().bindings.map { b in
-            Row(bundleIdentifier: b.bundleIdentifier,
-                name: AppInfo.name(forBundleIdentifier: b.bundleIdentifier),
-                icon: AppInfo.icon(forBundleIdentifier: b.bundleIdentifier),
+            Row(apps: b.bundleIdentifiers.map(Self.appEntry),
                 keyCode: b.keyCode, modifiers: b.modifiers)
         }
     }
 
-    func add(_ choice: AppChoice) {
-        let row = Row(bundleIdentifier: choice.bundleIdentifier, name: choice.name, icon: choice.icon)
+    func showAddShortcutPicker() {
+        stopRecording()
+        pickerRequest = PickerRequest(targetRowID: nil)
+    }
+
+    func showAddAppPicker(for row: Row) {
+        stopRecording()
+        pickerRequest = PickerRequest(targetRowID: row.id)
+    }
+
+    func finishPicking(_ choice: AppChoice?, request: PickerRequest) {
+        guard let choice else { return }
+        if let rowID = request.targetRowID {
+            add(choice, to: rowID)
+        } else {
+            addShortcut(choice)
+        }
+    }
+
+    func addShortcut(_ choice: AppChoice) {
+        let row = Row(apps: [Self.appEntry(for: choice)])
         rows.append(row)
         // Drop straight into recording the new row's shortcut.
         DispatchQueue.main.async { [weak self] in self?.startRecording(row.id) }
     }
 
+    func add(_ choice: AppChoice, to rowID: UUID) {
+        guard let idx = rows.firstIndex(where: { $0.id == rowID }),
+              !boundIdentifiers.contains(choice.bundleIdentifier) else { return }
+        rows[idx].apps.append(Self.appEntry(for: choice))
+        apply()
+    }
+
     func remove(_ row: Row) {
         stopRecording()
         rows.removeAll { $0.id == row.id }
+        apply()
+    }
+
+    func remove(_ app: AppEntry, from row: Row) {
+        guard let rowIdx = rows.firstIndex(where: { $0.id == row.id }) else { return }
+        rows[rowIdx].apps.removeAll { $0.bundleIdentifier == app.bundleIdentifier }
+        if rows[rowIdx].apps.isEmpty {
+            rows.remove(at: rowIdx)
+        }
+        apply()
+    }
+
+    func move(_ app: AppEntry, in row: Row, by offset: Int) {
+        guard let rowIdx = rows.firstIndex(where: { $0.id == row.id }),
+              let appIdx = rows[rowIdx].apps.firstIndex(of: app) else { return }
+        let maxIdx = rows[rowIdx].apps.count - 1
+        let newIdx = min(max(appIdx + offset, 0), maxIdx)
+        guard newIdx != appIdx else { return }
+        let moved = rows[rowIdx].apps.remove(at: appIdx)
+        rows[rowIdx].apps.insert(moved, at: newIdx)
         apply()
     }
 
@@ -164,9 +236,9 @@ final class SettingsModel: ObservableObject {
 
         let mods = ShortcutKit.carbonModifiers(from: event.modifierFlags)
         if let other = rows.firstIndex(where: { $0.id != id && $0.keyCode == keyCode && $0.modifiers == mods }) {
-            stopRecording(); NSSound.beep()
-            alert = AlertItem(title: "That shortcut is taken.",
-                message: "\(ShortcutKit.display(keyCode: keyCode, modifiers: mods)) is already used by \(rows[other].name). Pick a different one.")
+            let targetID = rows[other].id
+            stopRecording()
+            merge(rowID: id, into: targetID)
             return true
         }
         rows[idx].keyCode = keyCode
@@ -179,8 +251,35 @@ final class SettingsModel: ObservableObject {
     /// immediately, and an incomplete row stays visible until its shortcut is recorded.
     private func apply() {
         let config = CyclerConfig(bindings: rows.compactMap(\.binding))
+            .coalescingDuplicateShortcuts()
         do { try ctx.saveConfig(config) }
         catch { alert = AlertItem(title: "Couldn’t save your shortcuts.", message: error.localizedDescription) }
+    }
+
+    private func merge(rowID sourceID: UUID, into targetID: UUID) {
+        guard sourceID != targetID,
+              let sourceIdx = rows.firstIndex(where: { $0.id == sourceID }),
+              let targetIdx = rows.firstIndex(where: { $0.id == targetID }) else { return }
+
+        var seen = Set(rows[targetIdx].apps.map(\.bundleIdentifier))
+        for app in rows[sourceIdx].apps where !seen.contains(app.bundleIdentifier) {
+            rows[targetIdx].apps.append(app)
+            seen.insert(app.bundleIdentifier)
+        }
+        rows.removeAll { $0.id == sourceID }
+        apply()
+    }
+
+    private static func appEntry(_ bundleIdentifier: String) -> AppEntry {
+        let installed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+        return AppEntry(bundleIdentifier: bundleIdentifier,
+                        name: AppInfo.name(forBundleIdentifier: bundleIdentifier),
+                        icon: AppInfo.icon(forBundleIdentifier: bundleIdentifier),
+                        installed: installed)
+    }
+
+    private static func appEntry(for choice: AppChoice) -> AppEntry {
+        AppEntry(bundleIdentifier: choice.bundleIdentifier, name: choice.name, icon: choice.icon, installed: true)
     }
 }
 
@@ -193,13 +292,13 @@ struct SettingsRootView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shortcuts").font(.system(size: 22, weight: .bold))
-                Text("Press a shortcut to jump to its app. Press it again to step through that app’s windows.")
+                Text("Use one app to cycle windows, or add multiple apps to cycle between them.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
 
             if model.rows.isEmpty {
-                EmptyStateView { model.showPicker = true }
+                EmptyStateView { model.showAddShortcutPicker() }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
@@ -213,7 +312,7 @@ struct SettingsRootView: View {
 
             Divider()
             HStack {
-                Button { model.showPicker = true } label: {
+                Button { model.showAddShortcutPicker() } label: {
                     Label("Add Shortcut", systemImage: "plus")
                 }
                 .controlSize(.large)
@@ -222,9 +321,9 @@ struct SettingsRootView: View {
             .padding(16)
         }
         .frame(minWidth: 480, minHeight: 420)
-        .sheet(isPresented: $model.showPicker) {
+        .sheet(item: $model.pickerRequest) { request in
             AppPickerView(excluding: model.boundIdentifiers) { choice in
-                if let choice { model.add(choice) }
+                model.finishPicking(choice, request: request)
             }
         }
         .alert(item: $model.alert) { a in
@@ -240,24 +339,159 @@ private struct BindingRowView: View {
     private var isRecording: Bool { model.recordingID == row.id }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: row.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
-                .resizable().frame(width: 26, height: 26)
-            Text(row.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
-            Spacer(minLength: 12)
-            ShortcutField(text: row.shortcutText, isRecording: isRecording) {
-                model.toggleRecording(row.id)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                AppIconStack(apps: row.apps)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    Text(row.detailText).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                ShortcutField(text: row.shortcutText, isRecording: isRecording) {
+                    model.toggleRecording(row.id)
+                }
+                Button {
+                    model.showAddAppPicker(for: row)
+                } label: {
+                    Image(systemName: "plus.circle").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Add app to this shortcut")
+                .accessibilityLabel("Add app to \(row.title)")
+                Button {
+                    model.remove(row)
+                } label: {
+                    Image(systemName: "minus.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove shortcut")
+                .accessibilityLabel("Remove shortcut for \(row.title)")
             }
-            Button {
-                model.remove(row)
-            } label: {
-                Image(systemName: "minus.circle.fill").foregroundStyle(.tertiary)
+
+            if row.isGroup {
+                GroupAppList(row: row, model: model)
+                    .padding(.leading, 38)
             }
-            .buttonStyle(.borderless)
-            .help("Remove")
-            .accessibilityLabel("Remove shortcut for \(row.name)")
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct AppIconStack: View {
+    let apps: [SettingsModel.AppEntry]
+
+    var body: some View {
+        let visibleApps = apps.count > 3 ? Array(apps.prefix(2)) : Array(apps.prefix(3))
+        HStack(spacing: -6) {
+            ForEach(visibleApps) { app in
+                Image(nsImage: app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
+                    .resizable()
+                    .frame(width: 26, height: 26)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+            }
+            if apps.count > 3 {
+                Text("+\(apps.count - visibleApps.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .frame(width: 66, alignment: .leading)
+    }
+}
+
+private struct GroupAppList: View {
+    let row: SettingsModel.Row
+    @ObservedObject var model: SettingsModel
+    @State private var draggingID: String?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(Array(row.apps.enumerated()), id: \.element.id) { idx, app in
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .help("Drag to reorder")
+                    Text("\(idx + 1)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, alignment: .trailing)
+                    Image(nsImage: app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
+                        .resizable().frame(width: 18, height: 18)
+                    Text(app.name).font(.caption).lineLimit(1)
+                    if idx == 0 {
+                        Label("Primary", systemImage: "flag.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Launches first when none of the group apps are running")
+                    }
+                    if !app.installed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("App not installed")
+                    }
+                    Spacer(minLength: 8)
+                    Button {
+                        model.move(app, in: row, by: -1)
+                    } label: {
+                        Image(systemName: "chevron.up").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(idx == 0)
+                    .help("Move up")
+                    .accessibilityLabel("Move \(app.name) up")
+                    Button {
+                        model.move(app, in: row, by: 1)
+                    } label: {
+                        Image(systemName: "chevron.down").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(idx == row.apps.count - 1)
+                    .help("Move down")
+                    .accessibilityLabel("Move \(app.name) down")
+                    Button {
+                        model.remove(app, from: row)
+                    } label: {
+                        Image(systemName: "minus.circle").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove app from group")
+                    .accessibilityLabel("Remove \(app.name) from group")
+                }
+                .padding(.vertical, 2)
+                .opacity(app.installed ? 1 : 0.55)
+                .background(draggingID == app.bundleIdentifier ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.12) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 4)
+                    .onChanged { _ in
+                        draggingID = app.bundleIdentifier
+                    }
+                    .onEnded { value in
+                        let rowHeight: CGFloat = 26
+                        let offset = Int((value.translation.height / rowHeight).rounded())
+                        if offset != 0 {
+                            model.move(app, in: row, by: offset)
+                        }
+                        draggingID = nil
+                    })
+                .accessibilityAction(named: "Move Up") {
+                    model.move(app, in: row, by: -1)
+                }
+                .accessibilityAction(named: "Move Down") {
+                    model.move(app, in: row, by: 1)
+                }
+                .onDisappear {
+                    if draggingID == app.bundleIdentifier {
+                        draggingID = nil
+                    }
+                }
+                .help("Drag to reorder")
+            }
+        }
     }
 }
 
@@ -296,7 +530,7 @@ private struct EmptyStateView: View {
         VStack(spacing: 12) {
             Image(systemName: "command").font(.system(size: 40)).foregroundStyle(.tertiary)
             Text("No shortcuts yet").font(.system(size: 17, weight: .semibold))
-            Text("Add a shortcut for an app to jump to it, then press it again to cycle that app’s windows.")
+            Text("Add one app to cycle its windows, or add multiple apps to cycle between them.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
             Button(action: onAdd) { Label("Add Shortcut", systemImage: "plus") }

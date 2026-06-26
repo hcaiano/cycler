@@ -6,7 +6,8 @@ import CyclerCore
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 /// The heart of Cycler: press a per-app hotkey to bring an app to the front; press it again to
-/// walk that app's windows one at a time.
+/// walk that app's windows one at a time. Multi-app groups use the same app activation helpers,
+/// but intentionally stay window-agnostic.
 ///
 /// First press (app not already frontmost) = "go to this app": activate it and remember its main
 /// standard window. Repeat press (app already frontmost) = advance through a stable CGWindowID
@@ -38,9 +39,18 @@ final class AppActivator {
         let alreadyFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier
 
         if !alreadyFront {
-            // First press: go to the app. Focus its current main window (don't advance).
+            // First press: go to the app. Show the current window position without advancing, so
+            // the HUD appears consistently on the first engagement for multi-window apps.
             Self.activate(app)
-            if let mainIdx = Self.indexOfMain(in: windows) { lastIndex[bundleIdentifier] = mainIdx }
+            let focusedWindows = Self.windows(of: axApp)
+            let visibleWindows = focusedWindows.isEmpty ? windows : focusedWindows
+            let current = Self.indexOfMain(in: visibleWindows)
+                ?? Self.indexOfMain(in: windows)
+                ?? (visibleWindows.isEmpty ? nil : 0)
+            if let current {
+                lastIndex[bundleIdentifier] = current
+                Self.showWindowHUD(app, windows: visibleWindows, selectedIndex: current)
+            }
             return
         }
 
@@ -59,12 +69,72 @@ final class AppActivator {
         Self.raise(targetWindow)
         Self.activate(app)
         lastIndex[bundleIdentifier] = nextIdx
-        let titles = windows.map { Self.title(of: $0.element) }
+        Self.showWindowHUD(app, windows: windows, selectedIndex: nextIdx)
+    }
+
+    /// Cycle between the running members of an app group. Groups deliberately do not inspect or
+    /// cycle windows: a multi-app shortcut means "switch apps", while a single-app shortcut keeps
+    /// the per-window behaviour above.
+    func engageGroup(bundleIdentifiers: [String], direction: WindowCycle.Direction = .forward) {
+        guard bundleIdentifiers.count > 1 else {
+            if let bundleIdentifier = bundleIdentifiers.first {
+                engage(bundleIdentifier: bundleIdentifier, direction: direction)
+            }
+            return
+        }
+
+        let running = Set(bundleIdentifiers.filter { id in
+            !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
+        })
+        let installed: Set<String> = running.isEmpty
+            ? Set(bundleIdentifiers.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil })
+            : []
+        let action = AppGroupCycle.next(
+            group: bundleIdentifiers,
+            installed: installed,
+            running: running,
+            frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            direction: direction)
+        let display = AppGroupCycle.display(group: bundleIdentifiers, running: running, action: action)
+
+        switch action {
+        case .launch(let bundleIdentifier):
+            Self.launch(bundleIdentifier: bundleIdentifier)
+            Self.showGroupHUD(display)
+        case .activate(let bundleIdentifier):
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else { return }
+            Self.activate(app)
+            Self.showGroupHUD(display)
+        case .hide(let bundleIdentifier):
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else { return }
+            app.hide()
+        case .none:
+            let label = bundleIdentifiers.joined(separator: ", ")
+            FileHandle.standardError.write(Data(
+                "Cycler: no installed apps found for group \(label).\n".utf8))
+        }
+    }
+
+    private static func showGroupHUD(_ display: AppGroupCycle.Display) {
+        guard let selectedIndex = display.selectedIndex else { return }
+        CycleHUD.shared.showAppGroup(
+            apps: display.rows.map { row in
+                CycleHUD.AppGroupItem(
+                    name: appName(for: row.bundleIdentifier),
+                    icon: appIcon(for: row.bundleIdentifier),
+                    isRunning: row.isRunning,
+                    isSelected: row.isSelected)
+            },
+            selectedIndex: selectedIndex)
+    }
+
+    private static func showWindowHUD(_ app: NSRunningApplication, windows: [WindowRecord], selectedIndex: Int) {
+        let items = windows.map { Self.windowItem(for: $0, app: app) }
         CycleHUD.shared.show(
             appIcon: app.icon,
             appName: app.localizedName ?? "",
-            windowTitles: titles,
-            selectedIndex: nextIdx)
+            windows: items,
+            selectedIndex: selectedIndex)
     }
 
     // MARK: - AX helpers
@@ -131,6 +201,16 @@ final class AppActivator {
         return title
     }
 
+    private static func windowItem(for window: WindowRecord, app: NSRunningApplication) -> CycleHUD.WindowItem {
+        let rawTitle = Self.title(of: window.element)
+        guard WindowContext.supportsTrailingContext(bundleIdentifier: app.bundleIdentifier),
+              let appName = app.localizedName else {
+            return CycleHUD.WindowItem(title: rawTitle, context: nil)
+        }
+        let parsed = WindowContext.trailingContext(title: rawTitle, appName: appName)
+        return CycleHUD.WindowItem(title: parsed.title, context: parsed.context)
+    }
+
     /// Raise a window and make it the app's main/focused window.
     private static func raise(_ window: AXUIElement) {
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
@@ -157,5 +237,27 @@ final class AppActivator {
                 FileHandle.standardError.write(Data("Cycler: could not launch \(bundleIdentifier): \(error)\n".utf8))
             }
         }
+    }
+
+    private static func appName(for bundleIdentifier: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return bundleIdentifier
+        }
+        if let bundle = Bundle(url: url) {
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let name = bundle.object(forInfoDictionaryKey: key) as? String, !name.isEmpty {
+                    return name
+                }
+            }
+        }
+        let name = FileManager.default.displayName(atPath: url.path)
+        return name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
+    }
+
+    private static func appIcon(for bundleIdentifier: String) -> NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 }

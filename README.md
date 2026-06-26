@@ -7,9 +7,9 @@ First press of `Hyper + 1` (say, bound to Chrome) brings Chrome to the front. Pr
 and Cycler steps to Chrome's next window, then the next, wrapping around. No Dock hunting, no
 Mission Control. It lives in the menu bar and stays out of the way.
 
-> **Status: v0.1 feature surface.** The full pipeline (build, sign, notarize, auto-update,
-> website, CI) is wired, and the Settings UI plus app window cycling are implemented. See
-> [HANDOFF.md](HANDOFF.md) for what's done and what's next.
+> **Status: v0.3 feature surface.** The full pipeline (build, sign, notarize, auto-update,
+> website, CI) is wired, and Settings now supports single-app shortcuts, app groups, window
+> cycling, and compact HUDs. See [HANDOFF.md](HANDOFF.md) for what's done and what's next.
 
 ## Requirements
 
@@ -29,15 +29,29 @@ Bindings are stored in `~/.config/cycler/bindings.json`:
 ```json
 {
   "bindings": [
-    { "keyCode": 18, "modifiers": 6912, "bundleIdentifier": "com.google.Chrome" },
-    { "keyCode": 19, "modifiers": 6912, "bundleIdentifier": "com.apple.Safari" }
+    { "keyCode": 18, "modifiers": 6912, "bundleIdentifiers": ["com.google.Chrome"] },
+    { "keyCode": 19, "modifiers": 6912, "bundleIdentifiers": ["com.apple.Safari", "com.apple.mail", "com.apple.Notes"] }
   ]
 }
 ```
 
 - `keyCode` — a Carbon virtual key (`kVK_*`). `18` = the `1` key, `19` = `2`, etc.
 - `modifiers` — a Carbon modifier mask. `6912` is the Hyper key (⌃⌥⇧⌘).
-- `bundleIdentifier` — the target app (`osascript -e 'id of app "Safari"'` to look one up).
+- `bundleIdentifiers` — the target apps, in order (`osascript -e 'id of app "Safari"'` to look one up):
+  - **One app** — press to jump to it, press again to cycle that app's windows. Apps with
+    multiple windows show the compact HUD on first engagement and while cycling. For supported
+    Chromium-family browsers, Cycler shows the profile/account context first in the HUD row when
+    macOS exposes it in the window title.
+  - **Two or more apps (an app group)** — press to cycle between the apps in this order; window
+    cycling is given up in favour of app cycling. With nothing running, the first installed app in
+    the list launches. With one group app running, repeat presses hide/show that app. With several
+    running, each press activates the next running app (Shift for the previous). Launch/activate
+    group presses show a compact HUD with the configured app order and selected app.
+- In Settings, recording a shortcut that another row already uses joins those apps into one group
+  instead of asking for a different shortcut.
+
+> Older configs wrote a single `"bundleIdentifier": "…"` string. Cycler still reads that shape and
+> rewrites it to the `"bundleIdentifiers": […]` array on the next save.
 
 See [`bindings.example.json`](bindings.example.json). If you edit the file by hand, use
 **Reload bindings** in the menu (or relaunch).

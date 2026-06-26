@@ -11,7 +11,7 @@ private struct HotkeyCombo: Hashable {
 }
 
 private struct FailedHotkey {
-    var bundleIdentifier: String
+    var label: String
     var keyCode: Int
     var modifiers: UInt32
     var status: OSStatus
@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            config = try CyclerConfig.decode(data)
+            config = try CyclerConfig.decode(data).coalescingDuplicateShortcuts()
         } catch {
             // Malformed file: surface it, keep an empty config, do NOT overwrite the file.
             FileHandle.standardError.write(Data("bindings file could not be loaded (left untouched): \(error)\n".utf8))
@@ -79,13 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var failed: [FailedHotkey] = []
         let explicitCombos = Set(config.bindings.map { HotkeyCombo(keyCode: $0.keyCode, modifiers: $0.modifiers) })
         for b in config.bindings {
-            let bundleID = b.bundleIdentifier
+            let binding = b
             let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
-                AppActivator.shared.engage(bundleIdentifier: bundleID)
+                self.engage(binding, direction: .forward)
             }
             if status != noErr {
                 failed.append(FailedHotkey(
-                    bundleIdentifier: b.bundleIdentifier,
+                    label: bindingTitle(for: b.bundleIdentifiers),
                     keyCode: b.keyCode,
                     modifiers: b.modifiers,
                     status: status,
@@ -98,13 +98,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let combo = HotkeyCombo(keyCode: b.keyCode, modifiers: backwardModifiers)
             guard !explicitCombos.contains(combo) else { continue }
 
-            let bundleID = b.bundleIdentifier
+            let binding = b
             let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
-                AppActivator.shared.engage(bundleIdentifier: bundleID, direction: .backward)
+                self.engage(binding, direction: .backward)
             }
             if status != noErr {
                 failed.append(FailedHotkey(
-                    bundleIdentifier: b.bundleIdentifier,
+                    label: bindingTitle(for: b.bundleIdentifiers),
                     keyCode: b.keyCode,
                     modifiers: backwardModifiers,
                     status: status,
@@ -118,6 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateFailedHotkeyRetryTimer()
     }
 
+    private func engage(_ binding: AppBinding, direction: WindowCycle.Direction) {
+        if binding.isGroup {
+            AppActivator.shared.engageGroup(bundleIdentifiers: binding.bundleIdentifiers, direction: direction)
+        } else {
+            AppActivator.shared.engage(bundleIdentifier: binding.bundleIdentifier, direction: direction)
+        }
+    }
+
     @objc private func retryHotkeys() {
         HotkeyManager.shared.unregisterAll()
         registerHotkeys()
@@ -125,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reloadBindings() {
+        hotkeysSuspended = false
         HotkeyManager.shared.unregisterAll()
         reloadConfig()
         registerHotkeys()
@@ -147,7 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             try FileManager.default.copyItem(at: url, to: backup)
         }
-        try newConfig.encoded().write(to: url, options: .atomic)
+        try newConfig.coalescingDuplicateShortcuts().encoded().write(to: url, options: .atomic)
+        hotkeysSuspended = false
         reloadBindings()
     }
 
@@ -191,10 +201,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func logHotkeyFailure(_ failure: FailedHotkey) {
         let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
-        let name = appName(for: failure.bundleIdentifier)
         let direction = failure.generatedReverse ? " reverse" : ""
         FileHandle.standardError.write(Data(
-            "RegisterEventHotKey failed (\(failure.status)) for\(direction) \(name) \(combo) key \(failure.keyCode)\n".utf8))
+            "RegisterEventHotKey failed (\(failure.status)) for\(direction) \(failure.label) \(combo) key \(failure.keyCode)\n".utf8))
     }
 
     // MARK: - Accessibility watch
@@ -302,7 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func blockedHotkeyTitle(_ failure: FailedHotkey) -> String {
         let prefix = failure.generatedReverse ? "Reverse " : ""
         let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
-        return "\(prefix)\(appName(for: failure.bundleIdentifier)) \(combo) — \(hotkeyStatusDescription(failure.status))"
+        return "\(prefix)\(failure.label) \(combo) — \(hotkeyStatusDescription(failure.status))"
     }
 
     private func hotkeyStatusDescription(_ status: OSStatus) -> String {
@@ -316,6 +325,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let name = FileManager.default.displayName(atPath: url.path)
         return name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
+    }
+
+    private func bindingTitle(for bundleIdentifiers: [String]) -> String {
+        let names = bundleIdentifiers.map(appName)
+        switch names.count {
+        case 0:
+            return "Empty group"
+        case 1:
+            return names[0]
+        case 2, 3:
+            return names.joined(separator: " + ")
+        default:
+            return "\(names[0]) + \(names[1]) + \(names.count - 2) more"
+        }
     }
 
     @objc private func showAbout() { AboutWindowController.show() }
