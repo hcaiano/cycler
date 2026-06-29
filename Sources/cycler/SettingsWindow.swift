@@ -9,6 +9,7 @@ struct SettingsContext {
     var config: () -> CyclerConfig
     var saveConfig: (CyclerConfig) throws -> Void
     var setRecording: (Bool) -> Void
+    var hyperKeyStatus: () -> String?
 }
 
 // MARK: - Window controller (AppKit shell hosting a SwiftUI view)
@@ -120,6 +121,8 @@ final class SettingsModel: ObservableObject {
     @Published var recordingID: UUID?
     @Published var pickerRequest: PickerRequest?
     @Published var alert: AlertItem?
+    @Published var hyperKey: HyperKeySettings = .disabled
+    @Published var hyperKeyStatus: String?
 
     private let ctx: SettingsContext
     private var monitor: Any?
@@ -135,10 +138,13 @@ final class SettingsModel: ObservableObject {
 
     func reload() {
         stopRecording()
-        rows = ctx.config().bindings.map { b in
+        let config = ctx.config()
+        rows = config.bindings.map { b in
             Row(apps: b.bundleIdentifiers.map(Self.appEntry),
                 keyCode: b.keyCode, modifiers: b.modifiers)
         }
+        hyperKey = config.hyperKey
+        hyperKeyStatus = ctx.hyperKeyStatus()
     }
 
     func showAddShortcutPicker() {
@@ -204,6 +210,21 @@ final class SettingsModel: ObservableObject {
         if recordingID == id { stopRecording() } else { startRecording(id) }
     }
 
+    func setHyperKeyEnabled(_ enabled: Bool) {
+        hyperKey.enabled = enabled
+        apply()
+    }
+
+    func setHyperKeyTrigger(_ trigger: TriggerKey) {
+        hyperKey.triggerKey = trigger
+        apply()
+    }
+
+    func setHyperKeyIncludeShift(_ includeShift: Bool) {
+        hyperKey.includeShift = includeShift
+        apply()
+    }
+
     func startRecording(_ id: UUID) {
         guard rows.contains(where: { $0.id == id }) else { return }
         if recordingID != nil { stopRecording() }
@@ -250,9 +271,12 @@ final class SettingsModel: ObservableObject {
     /// Persist only complete rows (app + shortcut) and live-reload hotkeys; native apps apply
     /// immediately, and an incomplete row stays visible until its shortcut is recorded.
     private func apply() {
-        let config = CyclerConfig(bindings: rows.compactMap(\.binding))
+        let config = CyclerConfig(bindings: rows.compactMap(\.binding), hyperKey: hyperKey)
             .coalescingDuplicateShortcuts()
-        do { try ctx.saveConfig(config) }
+        do {
+            try ctx.saveConfig(config)
+            hyperKeyStatus = ctx.hyperKeyStatus()
+        }
         catch { alert = AlertItem(title: "Couldn’t save your shortcuts.", message: error.localizedDescription) }
     }
 
@@ -289,6 +313,30 @@ struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
+        TabView {
+            ShortcutsTab(model: model)
+                .tabItem { Label("Shortcuts", systemImage: "command") }
+            HyperKeyTab(model: model)
+                .tabItem { Label("Hyper Key", systemImage: "capslock") }
+        }
+        .frame(minWidth: 480, minHeight: 420)
+        .sheet(item: $model.pickerRequest) { request in
+            AppPickerView(excluding: model.boundIdentifiers) { choice in
+                model.finishPicking(choice, request: request)
+            }
+        }
+        .alert(item: $model.alert) { a in
+            Alert(title: Text(a.title), message: Text(a.message), dismissButton: .default(Text("OK")))
+        }
+    }
+}
+
+/// The primary page: the list of app shortcuts. Hyper Key lives on its own tab so this stays
+/// focused on the one thing most users come here to do.
+private struct ShortcutsTab: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shortcuts").font(.system(size: 22, weight: .bold))
@@ -296,6 +344,7 @@ struct SettingsRootView: View {
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+            Divider()
 
             if model.rows.isEmpty {
                 EmptyStateView { model.showAddShortcutPicker() }
@@ -320,15 +369,70 @@ struct SettingsRootView: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 480, minHeight: 420)
-        .sheet(item: $model.pickerRequest) { request in
-            AppPickerView(excluding: model.boundIdentifiers) { choice in
-                model.finishPicking(choice, request: request)
+    }
+}
+
+/// Secondary, rarely-touched settings: the optional built-in Hyper Key. A grouped Form is the
+/// native macOS-settings shape and keeps this off the primary Shortcuts page.
+private struct HyperKeyTab: View {
+    @ObservedObject var model: SettingsModel
+
+    private var enabled: Binding<Bool> {
+        Binding(get: { model.hyperKey.enabled }, set: { model.setHyperKeyEnabled($0) })
+    }
+
+    private var trigger: Binding<TriggerKey> {
+        Binding(get: { model.hyperKey.triggerKey }, set: { model.setHyperKeyTrigger($0) })
+    }
+
+    private var includeShift: Binding<Bool> {
+        Binding(get: { model.hyperKey.includeShift }, set: { model.setHyperKeyIncludeShift($0) })
+    }
+
+    private var shortcutHint: String {
+        model.hyperKey.includeShift ? "Records shortcuts as ⌃⌥⇧⌘." : "Records shortcuts as ⌃⌥⌘."
+    }
+
+    private var blockedStatus: String? {
+        guard let status = model.hyperKeyStatus, status.hasPrefix("Blocked") else { return nil }
+        return status
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable Hyper Key", isOn: enabled)
+            } footer: {
+                Text("Turns one key into a system-wide Hyper modifier, so you don't need Karabiner or Raycast. Off by default.")
+            }
+
+            if model.hyperKey.enabled {
+                Section {
+                    Picker("Trigger key", selection: trigger) {
+                        ForEach(TriggerKey.allCases, id: \.self) { key in
+                            Text(key.displayName).tag(key)
+                        }
+                    }
+                    Toggle("Include Shift (⇧)", isOn: includeShift)
+                        .help("Adds ⇧ so Hyper is ⌃⌥⇧⌘.")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(shortcutHint)
+                        if model.hyperKey.triggerKey == .capsLock {
+                            Text("Caps Lock is remapped while Cycler runs and restored when you switch keys or quit.")
+                        }
+                    }
+                }
+
+                if let blockedStatus {
+                    Section {
+                        Label(blockedStatus, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
             }
         }
-        .alert(item: $model.alert) { a in
-            Alert(title: Text(a.title), message: Text(a.message), dismissButton: .default(Text("OK")))
-        }
+        .formStyle(.grouped)
     }
 }
 

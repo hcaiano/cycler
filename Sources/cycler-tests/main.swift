@@ -115,6 +115,73 @@ do {
           "distinct shortcuts stay separate")
 }
 
+// ---- HyperKeySettings: off-by-default, backward-compatible decode, round-trip ----
+do {
+    // Config JSON written before HyperKey existed must still decode, as the disabled defaults.
+    let legacy = try CyclerConfig.decode(Data("{\"bindings\":[]}".utf8))
+    check(legacy.hyperKey == .disabled, "missing hyperKey decodes to .disabled")
+    check(legacy.hyperKey.enabled == false, "default hyperKey is off")
+    check(legacy.hyperKey.triggerKey == .capsLock, "default trigger is Caps Lock")
+    check(legacy.hyperKey.includeShift == true, "default includeShift is true")
+}
+do {
+    // A real binding file from before this change (only the legacy singular key) still decodes,
+    // and HyperKey is absent -> disabled.
+    let legacy = try CyclerConfig.decode(Data(
+        "{\"bindings\":[{\"keyCode\":18,\"modifiers\":6912,\"bundleIdentifier\":\"com.google.Chrome\"}]}".utf8))
+    check(legacy.hyperKey == .disabled, "legacy binding file decodes with hyperKey disabled")
+}
+do {
+    // An enabled Caps Lock / includeShift-true setting round-trips through JSON.
+    let cfg = CyclerConfig(
+        bindings: [AppBinding(keyCode: 18, modifiers: hyperMask, bundleIdentifier: "com.apple.Safari")],
+        hyperKey: HyperKeySettings(enabled: true, triggerKey: .capsLock, includeShift: true))
+    let back = try CyclerConfig.decode(try cfg.encoded())
+    check(back == cfg, "config with enabled hyperKey round-trips")
+    check(back.hyperKey.enabled, "enabled survives the round-trip")
+    check(back.hyperKey.triggerKey == .capsLock, "trigger survives the round-trip")
+    check(back.hyperKey.includeShift, "includeShift survives the round-trip")
+    let json = String(decoding: try cfg.encoded(), as: UTF8.self)
+    check(json.contains("\"hyperKey\""), "encode emits hyperKey")
+}
+do {
+    // includeShift = false also round-trips, so the flag is genuinely persisted.
+    let cfg = CyclerConfig(hyperKey: HyperKeySettings(enabled: true, triggerKey: .capsLock, includeShift: false))
+    let back = try CyclerConfig.decode(try cfg.encoded())
+    check(back.hyperKey == cfg.hyperKey, "includeShift=false round-trips")
+    check(back.hyperKey.includeShift == false, "includeShift false survives the round-trip")
+}
+do {
+    // Function-key triggers are real persisted choices, not UI placeholders.
+    check(TriggerKey.allCases == [.capsLock, .f18, .f19, .f20], "trigger key choices stay ordered")
+    check(TriggerKey.capsLock.displayName == "Caps Lock", "Caps Lock trigger has a display name")
+    check(TriggerKey.f18.displayName == "F18", "F18 trigger has a display name")
+    check(TriggerKey.f19.displayName == "F19", "F19 trigger has a display name")
+    check(TriggerKey.f20.displayName == "F20", "F20 trigger has a display name")
+    check(TriggerKey.capsLock.needsCapsLockRemap, "Caps Lock trigger needs the hidutil remap")
+    check(!TriggerKey.f18.needsCapsLockRemap, "F18 trigger does not need the hidutil remap")
+    check(!TriggerKey.f19.needsCapsLockRemap, "F19 trigger does not need the hidutil remap")
+    check(!TriggerKey.f20.needsCapsLockRemap, "F20 trigger does not need the hidutil remap")
+
+    let cfg = CyclerConfig(hyperKey: HyperKeySettings(enabled: true, triggerKey: .f19, includeShift: true))
+    let back = try CyclerConfig.decode(try cfg.encoded())
+    check(back.hyperKey.triggerKey == .f19, "F19 trigger round-trips")
+    let json = String(decoding: try cfg.encoded(), as: UTF8.self)
+    check(json.contains("\"triggerKey\" : \"f19\""), "encode emits the selected function trigger")
+}
+do {
+    // Coalescing duplicate shortcuts must not drop the hyperKey setting.
+    let cfg = CyclerConfig(
+        bindings: [
+            AppBinding(keyCode: 18, modifiers: hyperMask, bundleIdentifier: "com.openai.codex"),
+            AppBinding(keyCode: 18, modifiers: hyperMask, bundleIdentifier: "com.google.Gemini"),
+        ],
+        hyperKey: HyperKeySettings(enabled: true, triggerKey: .capsLock, includeShift: false))
+    let merged = cfg.coalescingDuplicateShortcuts()
+    check(merged.bindings.count == 1, "duplicate shortcuts still coalesce with hyperKey present")
+    check(merged.hyperKey == cfg.hyperKey, "coalescing preserves hyperKey")
+}
+
 // ---- AppGroupCycle: the press-again-to-cycle-apps order ----
 let safari = "com.apple.Safari", mail = "com.apple.mail", notes = "com.apple.Notes"
 let trio = [safari, mail, notes]

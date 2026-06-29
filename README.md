@@ -19,13 +19,18 @@ Cycler is signed, notarized, and updates itself with Sparkle.
 - macOS 13+
 - **Accessibility permission** (Cycler reads and raises other apps' windows via the
   Accessibility API). The menu surfaces a "Grant Accessibility…" item until it's granted.
-- A Hyper key is optional but recommended (Caps Lock → ⌃⌥⇧⌘ via Karabiner/hidutil). Any
-  modifier combo works.
+- A Hyper key is optional but recommended. Cycler can provide one from Settings (off by
+  default) using Caps Lock, F18, F19, or F20, or you can keep using Raycast/Karabiner/hidutil.
+  Any modifier combo works.
 
 ## Configure shortcuts
 
 Use **Settings…** from the Cycler menu-bar item to add, edit, remove, and save app shortcuts.
 The app picker suggests running apps and Dock apps, with **Browse…** as a fallback.
+
+The secondary **Hyper Key** settings page is disabled by default. Turn it on to make Caps Lock or
+a function key behave as Hyper system-wide; if Raycast already owns Caps Lock, Cycler reports it
+as blocked instead of competing with it.
 
 Bindings are stored in `~/.config/cycler/bindings.json`:
 

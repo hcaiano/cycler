@@ -72,13 +72,79 @@ public struct AppBinding: Codable, Equatable, Sendable {
     }
 }
 
+/// Which physical key, when held, Cycler turns into Hyper.
+///
+/// Caps Lock needs an OS-level remap (Cycler maps it to F18 via `hidutil`) because macOS otherwise
+/// swallows it as a lock toggle. The function keys are already ordinary keys, so Cycler can grab
+/// them straight from its event tap with no remap. Raw values are stable on-disk tokens — `capsLock`
+/// matches what older configs already wrote, so they keep decoding unchanged.
+public enum TriggerKey: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
+    case capsLock
+    case f18
+    case f19
+    case f20
+
+    /// Human label for the trigger picker. Pure text (no AppKit), so it stays in CyclerCore.
+    public var displayName: String {
+        switch self {
+        case .capsLock: return "Caps Lock"
+        case .f18: return "F18"
+        case .f19: return "F19"
+        case .f20: return "F20"
+        }
+    }
+
+    /// Whether engaging this trigger requires Cycler's `hidutil` remap. Only Caps Lock does; the
+    /// function keys are caught directly by the event tap.
+    public var needsCapsLockRemap: Bool { self == .capsLock }
+}
+
+/// Optional, off-by-default built-in HyperKey. When `enabled`, Cycler itself makes the `triggerKey`
+/// behave as Hyper system-wide, so users don't need Raycast/Karabiner. This is pure persisted
+/// settings only; the actual key remapping lives in the AppKit target (Sources/cycler), never here.
+public struct HyperKeySettings: Codable, Equatable, Sendable {
+    public var enabled: Bool
+    public var triggerKey: TriggerKey
+    /// `true` means Cycler's default Hyper (control+option+shift+command); `false` excludes Shift.
+    public var includeShift: Bool
+
+    public init(enabled: Bool = false, triggerKey: TriggerKey = .capsLock, includeShift: Bool = true) {
+        self.enabled = enabled
+        self.triggerKey = triggerKey
+        self.includeShift = includeShift
+    }
+
+    /// The default for a config that has never enabled HyperKey: off, Caps Lock, full Hyper.
+    public static let disabled = HyperKeySettings()
+}
+
 /// The on-disk config: the user's per-app bindings. Loaded from
 /// `~/.config/cycler/bindings.json`. A missing or empty file is valid (no shortcuts bound yet).
 public struct CyclerConfig: Codable, Equatable, Sendable {
     public var bindings: [AppBinding]
+    public var hyperKey: HyperKeySettings
 
-    public init(bindings: [AppBinding] = []) {
+    public init(bindings: [AppBinding] = [], hyperKey: HyperKeySettings = .disabled) {
         self.bindings = bindings
+        self.hyperKey = hyperKey
+    }
+
+    // `hyperKey` is a later addition; files written before it simply omit the key. Decode it with
+    // `decodeIfPresent` so existing configs load as `.disabled` instead of failing.
+    private enum CodingKeys: String, CodingKey {
+        case bindings, hyperKey
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bindings = try c.decode([AppBinding].self, forKey: .bindings)
+        hyperKey = try c.decodeIfPresent(HyperKeySettings.self, forKey: .hyperKey) ?? .disabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(bindings, forKey: .bindings)
+        try c.encode(hyperKey, forKey: .hyperKey)
     }
 
     /// Decode from raw JSON bytes. Throws on malformed JSON (the caller surfaces it and keeps an
@@ -117,7 +183,7 @@ public struct CyclerConfig: Codable, Equatable, Sendable {
             merged[existingIndex] = existing
         }
 
-        return CyclerConfig(bindings: merged)
+        return CyclerConfig(bindings: merged, hyperKey: hyperKey)
     }
 }
 

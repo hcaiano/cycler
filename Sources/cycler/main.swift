@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trustTimer: Timer?
     private var trustPollTicks = 0
     private var settingsWindowController: SettingsWindowController?
+    private let hyperKeyController = HyperKeyController()
+    private var hyperKeySignalSources: [DispatchSourceSignal] = []
 
     /// `~/.config/cycler/bindings.json` — the user's per-app hotkey bindings.
     static var configURL: URL {
@@ -48,8 +50,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AppUpdater.shared  // start Sparkle's scheduled background update checks
         reloadConfig()
         registerHotkeys()
+        applyHyperKeySettings()
         buildStatusItem()
         startAccessibilityWatch()
+        installHyperKeySignalCleanup()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil)
     }
 
     // MARK: - Config
@@ -137,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotkeyManager.shared.unregisterAll()
         reloadConfig()
         registerHotkeys()
+        applyHyperKeySettings()
         buildStatusItem()
     }
 
@@ -170,6 +180,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             registerHotkeys()
         }
+        buildStatusItem()
+    }
+
+    private func applyHyperKeySettings() {
+        hyperKeyController.apply(config.hyperKey)
+        if case .blocked(let message) = hyperKeyController.state {
+            FileHandle.standardError.write(Data("Cycler HyperKey blocked: \(message)\n".utf8))
+        }
+    }
+
+    private func installHyperKeySignalCleanup() {
+        guard hyperKeySignalSources.isEmpty else { return }
+        for signal in [SIGINT, SIGTERM, SIGHUP] {
+            Darwin.signal(signal, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signal, queue: .main)
+            source.setEventHandler { [weak self] in
+                self?.hyperKeyController.stop()
+                fflush(stderr)
+                exit(128 + signal)
+            }
+            source.resume()
+            hyperKeySignalSources.append(source)
+        }
+    }
+
+    @objc private func systemDidWake() {
+        applyHyperKeySettings()
         buildStatusItem()
     }
 
@@ -266,6 +303,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             addInfo(menu, "⚠︎ bindings.json couldn't be loaded")
             hasWarning = true
         }
+        if let status = hyperKeyController.menuStatus {
+            addInfo(menu, status)
+            hasWarning = true
+        }
         if hasWarning { menu.addItem(.separator()) }
 
         if config.bindings.isEmpty {
@@ -349,7 +390,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController = SettingsWindowController(context: SettingsContext(
                 config: { [weak self] in self?.config ?? CyclerConfig() },
                 saveConfig: { [weak self] newConfig in try self?.saveConfigAndReload(newConfig) },
-                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) }
+                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) },
+                hyperKeyStatus: { [weak self] in self?.hyperKeyController.settingsStatus }
             ))
         }
         DispatchQueue.main.async { [weak self] in
@@ -379,6 +421,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hyperKeyController.stop()
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
