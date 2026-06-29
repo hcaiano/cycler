@@ -12,6 +12,7 @@ final class HyperKeyController {
     private static let capsLockHID: UInt64 = 0x700000039
     private static let f18HID: UInt64 = 0x70000006D
     private static let capsLockKeyCode = 57
+    private static let ownsCapsLockMappingKey = "CyclerOwnsCapsLockToF18Mapping"
     private static var clearOnExit = false
     private static var installedAtexit = false
 
@@ -30,7 +31,6 @@ final class HyperKeyController {
     private var source: CFRunLoopSource?
     private var triggerDown = false
     private var didApplyMapping = false
-    private var didReconcileDisabledMapping = false
     private var includeShift = true
     private var activeTrigger: TriggerKey?
     private var triggerKeyCode: Int64 = 79
@@ -60,10 +60,7 @@ final class HyperKeyController {
     func apply(_ settings: HyperKeySettings) {
         guard settings.enabled else {
             stop()
-            if !didReconcileDisabledMapping {
-                _ = Self.clearIfMappingIsOurs()
-                didReconcileDisabledMapping = true
-            }
+            _ = Self.clearKnownOwnedMapping()
             state = .disabled
             return
         }
@@ -71,15 +68,16 @@ final class HyperKeyController {
         // Raycast only matters when Cycler also wants Caps Lock — F18/F19/F20 never collide with it.
         if settings.triggerKey.needsCapsLockRemap, Self.raycastCapsHyperEnabled() {
             stop()
-            _ = Self.clearIfMappingIsOurs()
+            _ = Self.clearKnownOwnedMapping()
             state = .blocked("Raycast is using Caps Lock")
             return
         }
 
-        // A function-key trigger never uses hidutil; clear any Caps Lock remap we previously left so
-        // switching away from Caps Lock restores the key.
+        // A function-key trigger never uses hidutil; clear only a Caps Lock remap that Cycler knows
+        // it created in this or a previous crashed run. A user-owned CapsLock->F18 mapping has the
+        // same shape, so shape alone must not be treated as ownership.
         if !settings.triggerKey.needsCapsLockRemap {
-            _ = Self.clearIfMappingIsOurs()
+            _ = Self.clearKnownOwnedMapping()
         }
 
         switch start(trigger: settings.triggerKey, includeShift: settings.includeShift) {
@@ -109,17 +107,25 @@ final class HyperKeyController {
 
         if trigger.needsCapsLockRemap {
             let mapping = Self.currentMapping()
-            guard Self.isMappingEmpty(mapping) || Self.isMappingOurs(mapping) else {
+            let mappingIsOurs = Self.isMappingOurs(mapping)
+            guard Self.isMappingEmpty(mapping) || mappingIsOurs else {
                 return .blocked("existing hidutil UserKeyMapping is not Cycler's CapsLock->F18 mapping")
             }
-            if !Self.isMappingOurs(mapping) {
+            var createdMapping = false
+            if !mappingIsOurs {
                 guard Self.applyCapsLockToF18() else {
                     return .blocked("hidutil failed to apply CapsLock->F18")
                 }
+                createdMapping = true
             }
-            didApplyMapping = true
-            Self.clearOnExit = true
-            Self.installAtexit()
+            if createdMapping || Self.ownsCapsLockMapping {
+                didApplyMapping = true
+                if createdMapping {
+                    Self.setOwnsCapsLockMapping(true)
+                }
+                Self.clearOnExit = true
+                Self.installAtexit()
+            }
         }
 
         triggerKeyCode = Self.watchKeyCode(for: trigger)
@@ -166,7 +172,7 @@ final class HyperKeyController {
         activeTrigger = nil
 
         if didApplyMapping {
-            _ = Self.clearIfMappingIsOurs()
+            _ = Self.clearKnownOwnedMapping()
             didApplyMapping = false
             Self.clearOnExit = false
         }
@@ -252,6 +258,33 @@ final class HyperKeyController {
         return true
     }
 
+    private static func clearKnownOwnedMapping() -> Bool {
+        guard ownsCapsLockMapping else { return false }
+        guard isMappingOurs(currentMapping()) else {
+            setOwnsCapsLockMapping(false)
+            clearOnExit = false
+            return false
+        }
+        let cleared = clearIfMappingIsOurs()
+        if cleared {
+            setOwnsCapsLockMapping(false)
+            clearOnExit = false
+        }
+        return cleared
+    }
+
+    private static var ownsCapsLockMapping: Bool {
+        UserDefaults.standard.bool(forKey: ownsCapsLockMappingKey)
+    }
+
+    private static func setOwnsCapsLockMapping(_ owns: Bool) {
+        if owns {
+            UserDefaults.standard.set(true, forKey: ownsCapsLockMappingKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: ownsCapsLockMappingKey)
+        }
+    }
+
     private static func raycastCapsHyperEnabled() -> Bool {
         guard let value = CFPreferencesCopyAppValue(
             "raycast_hyperKey_state" as CFString,
@@ -286,7 +319,7 @@ final class HyperKeyController {
         installedAtexit = true
         atexit {
             if HyperKeyController.clearOnExit {
-                _ = HyperKeyController.clearIfMappingIsOurs()
+                _ = HyperKeyController.clearKnownOwnedMapping()
             }
         }
     }
