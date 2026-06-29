@@ -23,7 +23,8 @@ final class AppActivator {
 
     /// Bring `bundleIdentifier` forward, or cycle its windows if it's already frontmost.
     func engage(bundleIdentifier: String, direction: WindowCycle.Direction = .forward) {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        guard !apps.isEmpty else {
             Self.launch(bundleIdentifier: bundleIdentifier)
             lastIndex.removeValue(forKey: bundleIdentifier)
             return
@@ -34,22 +35,23 @@ final class AppActivator {
             return
         }
 
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        let windows = Self.windows(of: axApp)
+        let windows = Self.windows(of: apps)
+        let app = Self.preferredApplication(from: apps, bundleIdentifier: bundleIdentifier, windows: windows)
         let alreadyFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier
 
         if !alreadyFront {
             // First press: go to the app. Show the current window position without advancing, so
             // the HUD appears consistently on the first engagement for multi-window apps.
             Self.activate(app)
-            let focusedWindows = Self.windows(of: axApp)
+            let focusedWindows = Self.windows(of: apps)
             let visibleWindows = focusedWindows.isEmpty ? windows : focusedWindows
             let current = Self.indexOfMain(in: visibleWindows)
                 ?? (visibleWindows.isEmpty ? nil : 0)
             if let current {
-                Self.raise(visibleWindows[current].element)
+                let selectedWindow = visibleWindows[current]
+                Self.raise(selectedWindow.element)
                 lastIndex[bundleIdentifier] = current
-                Self.showWindowHUD(app, windows: visibleWindows, selectedIndex: current)
+                Self.showWindowHUD(selectedWindow.app, windows: visibleWindows, selectedIndex: current)
             }
             return
         }
@@ -65,11 +67,11 @@ final class AppActivator {
         // remembered index), then raise the next one.
         let current = Self.indexOfMain(in: windows) ?? lastIndex[bundleIdentifier]
         guard let nextIdx = WindowCycle.next(count: windows.count, current: current, direction: direction) else { return }
-        let targetWindow = windows[nextIdx].element
-        Self.activate(app)
-        Self.raise(targetWindow)
+        let targetWindow = windows[nextIdx]
+        Self.activate(targetWindow.app)
+        Self.raise(targetWindow.element)
         lastIndex[bundleIdentifier] = nextIdx
-        Self.showWindowHUD(app, windows: windows, selectedIndex: nextIdx)
+        Self.showWindowHUD(targetWindow.app, windows: windows, selectedIndex: nextIdx)
     }
 
     /// Cycle between the running members of an app group. Groups deliberately do not inspect or
@@ -129,7 +131,7 @@ final class AppActivator {
     }
 
     private static func showWindowHUD(_ app: NSRunningApplication, windows: [WindowRecord], selectedIndex: Int) {
-        let items = windows.map { Self.windowItem(for: $0, app: app) }
+        let items = windows.map { Self.windowItem(for: $0) }
         CycleHUD.shared.show(
             appIcon: app.icon,
             appName: app.localizedName ?? "",
@@ -140,11 +142,18 @@ final class AppActivator {
     // MARK: - AX helpers
 
     private struct WindowRecord {
+        var app: NSRunningApplication
         var element: AXUIElement
         var windowID: CGWindowID
     }
 
-    private static func windows(of axApp: AXUIElement) -> [WindowRecord] {
+    private static func windows(of apps: [NSRunningApplication]) -> [WindowRecord] {
+        apps
+            .flatMap { app in windows(of: AXUIElementCreateApplication(app.processIdentifier), app: app) }
+            .sorted { lhs, rhs in lhs.windowID < rhs.windowID }
+    }
+
+    private static func windows(of axApp: AXUIElement, app: NSRunningApplication) -> [WindowRecord] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return [] }
@@ -152,9 +161,8 @@ final class AppActivator {
             .filter { isStandardWindow($0) && !isMinimized($0) }
             .compactMap { window in
                 guard let windowID = windowID(of: window) else { return nil }
-                return WindowRecord(element: window, windowID: windowID)
+                return WindowRecord(app: app, element: window, windowID: windowID)
             }
-            .sorted { lhs, rhs in lhs.windowID < rhs.windowID }
     }
 
     private static func isStandardWindow(_ window: AXUIElement) -> Bool {
@@ -179,19 +187,17 @@ final class AppActivator {
 
     /// Index of the app's main window within the stable CGWindowID order, if any.
     private static func indexOfMain(in windows: [WindowRecord]) -> Int? {
-        guard let mainWindowID = mainWindowID(in: windows) else { return nil }
-        return windows.firstIndex { $0.windowID == mainWindowID }
+        if let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           let frontmostMain = windows.firstIndex(where: { $0.app.processIdentifier == frontmostPID && isMain($0.element) }) {
+            return frontmostMain
+        }
+        return windows.firstIndex { isMain($0.element) }
     }
 
-    private static func mainWindowID(in windows: [WindowRecord]) -> CGWindowID? {
-        for win in windows {
-            var value: CFTypeRef?
-            if AXUIElementCopyAttributeValue(win.element, kAXMainAttribute as CFString, &value) == .success,
-               let isMain = value as? Bool, isMain {
-                return win.windowID
-            }
-        }
-        return nil
+    private static func isMain(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(window, kAXMainAttribute as CFString, &value) == .success
+            && (value as? Bool) == true
     }
 
     private static func title(of window: AXUIElement) -> String {
@@ -201,14 +207,31 @@ final class AppActivator {
         return title
     }
 
-    private static func windowItem(for window: WindowRecord, app: NSRunningApplication) -> CycleHUD.WindowItem {
+    private static func windowItem(for window: WindowRecord) -> CycleHUD.WindowItem {
         let rawTitle = Self.title(of: window.element)
-        guard WindowContext.supportsTrailingContext(bundleIdentifier: app.bundleIdentifier),
-              let appName = app.localizedName else {
+        let windowApp = window.app
+        guard WindowContext.supportsTrailingContext(bundleIdentifier: windowApp.bundleIdentifier),
+              let appName = windowApp.localizedName else {
             return CycleHUD.WindowItem(title: rawTitle, context: nil)
         }
         let parsed = WindowContext.trailingContext(title: rawTitle, appName: appName)
         return CycleHUD.WindowItem(title: parsed.title, context: parsed.context)
+    }
+
+    private static func preferredApplication(
+        from apps: [NSRunningApplication],
+        bundleIdentifier: String,
+        windows: [WindowRecord]
+    ) -> NSRunningApplication {
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.bundleIdentifier == bundleIdentifier,
+           let app = apps.first(where: { $0.processIdentifier == frontmost.processIdentifier }) {
+            return app
+        }
+        let windowCounts = Dictionary(grouping: windows, by: { $0.app.processIdentifier }).mapValues(\.count)
+        return apps.max { lhs, rhs in
+            (windowCounts[lhs.processIdentifier] ?? 0) < (windowCounts[rhs.processIdentifier] ?? 0)
+        } ?? apps[0]
     }
 
     /// Raise a window and make it the app's main/focused window.
