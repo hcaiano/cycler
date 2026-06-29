@@ -10,6 +10,7 @@ struct SettingsContext {
     var saveConfig: (CyclerConfig) throws -> Void
     var setRecording: (Bool) -> Void
     var hyperKeyStatus: () -> String?
+    var openInputMonitoringSettings: () -> Void
 }
 
 // MARK: - Window controller (AppKit shell hosting a SwiftUI view)
@@ -225,6 +226,10 @@ final class SettingsModel: ObservableObject {
         apply()
     }
 
+    func openInputMonitoringSettings() {
+        ctx.openInputMonitoringSettings()
+    }
+
     func startRecording(_ id: UUID) {
         guard rows.contains(where: { $0.id == id }) else { return }
         if recordingID != nil { stopRecording() }
@@ -398,6 +403,10 @@ private struct HyperKeyTab: View {
         return status
     }
 
+    private var inputMonitoringBlocked: Bool {
+        blockedStatus?.contains("Input Monitoring") == true
+    }
+
     var body: some View {
         Form {
             Section {
@@ -428,6 +437,17 @@ private struct HyperKeyTab: View {
                     Section {
                         Label(blockedStatus, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
+                        if inputMonitoringBlocked {
+                            Button {
+                                model.openInputMonitoringSettings()
+                            } label: {
+                                Label("Open Input Monitoring", systemImage: "keyboard")
+                            }
+                        }
+                    } footer: {
+                        if inputMonitoringBlocked {
+                            Text("Allow Cycler in System Settings, then return to Cycler; Hyper Key will retry when the app becomes active.")
+                        }
                     }
                 }
             }

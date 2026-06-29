@@ -13,6 +13,7 @@ final class HyperKeyController {
     private static let f18HID: UInt64 = 0x70000006D
     private static let capsLockKeyCode = 57
     private static let ownsCapsLockMappingKey = "CyclerOwnsCapsLockToF18Mapping"
+    private static let inputMonitoringBlockedMessage = "Input Monitoring permission required"
     private static var clearOnExit = false
     private static var installedAtexit = false
 
@@ -55,6 +56,10 @@ final class HyperKeyController {
         case .blocked(let message):
             return "Blocked: \(message)"
         }
+    }
+
+    var needsInputMonitoring: Bool {
+        state == .blocked(Self.inputMonitoringBlockedMessage)
     }
 
     func apply(_ settings: HyperKeySettings) {
@@ -104,6 +109,10 @@ final class HyperKeyController {
             return .started
         }
         self.includeShift = includeShift
+
+        guard Self.ensureListenEventAccess() else {
+            return .blocked(Self.inputMonitoringBlockedMessage)
+        }
 
         if trigger.needsCapsLockRemap {
             let mapping = Self.currentMapping()
@@ -214,6 +223,11 @@ final class HyperKeyController {
             raw |= CGEventFlags.maskShift.rawValue
         }
         return CGEventFlags(rawValue: raw)
+    }
+
+    private static func ensureListenEventAccess() -> Bool {
+        if CGPreflightListenEventAccess() { return true }
+        return CGRequestListenEventAccess()
     }
 
     private static func currentMapping() -> String {

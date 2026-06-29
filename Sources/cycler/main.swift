@@ -234,6 +234,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func applicationBecameActive() {
         retryFailedHotkeys()
+        if hyperKeyController.needsInputMonitoring {
+            applyHyperKeySettings()
+            buildStatusItem()
+        }
     }
 
     private func logHotkeyFailure(_ failure: FailedHotkey) {
@@ -305,6 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let status = hyperKeyController.menuStatus {
             addInfo(menu, status)
+            if hyperKeyController.needsInputMonitoring {
+                menu.addItem(menuItem("Grant Input Monitoring…", #selector(openInputMonitoringSettings), symbol: "keyboard"))
+            }
             hasWarning = true
         }
         if hasWarning { menu.addItem(.separator()) }
@@ -391,7 +398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 config: { [weak self] in self?.config ?? CyclerConfig() },
                 saveConfig: { [weak self] newConfig in try self?.saveConfigAndReload(newConfig) },
                 setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) },
-                hyperKeyStatus: { [weak self] in self?.hyperKeyController.settingsStatus }
+                hyperKeyStatus: { [weak self] in self?.hyperKeyController.settingsStatus },
+                openInputMonitoringSettings: { [weak self] in self?.openInputMonitoringSettings() }
             ))
         }
         DispatchQueue.main.async { [weak self] in
@@ -419,6 +427,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Request Input Monitoring for the Hyper Key event tap and open the exact privacy pane in case
+    /// macOS has already recorded a denial and will not show the prompt again.
+    @objc private func openInputMonitoringSettings() {
+        _ = CGRequestListenEventAccess()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
     }
