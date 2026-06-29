@@ -45,9 +45,9 @@ final class AppActivator {
             let focusedWindows = Self.windows(of: axApp)
             let visibleWindows = focusedWindows.isEmpty ? windows : focusedWindows
             let current = Self.indexOfMain(in: visibleWindows)
-                ?? Self.indexOfMain(in: windows)
                 ?? (visibleWindows.isEmpty ? nil : 0)
             if let current {
+                Self.raise(visibleWindows[current].element)
                 lastIndex[bundleIdentifier] = current
                 Self.showWindowHUD(app, windows: visibleWindows, selectedIndex: current)
             }
@@ -66,8 +66,8 @@ final class AppActivator {
         let current = Self.indexOfMain(in: windows) ?? lastIndex[bundleIdentifier]
         guard let nextIdx = WindowCycle.next(count: windows.count, current: current, direction: direction) else { return }
         let targetWindow = windows[nextIdx].element
-        Self.raise(targetWindow)
         Self.activate(app)
+        Self.raise(targetWindow)
         lastIndex[bundleIdentifier] = nextIdx
         Self.showWindowHUD(app, windows: windows, selectedIndex: nextIdx)
     }
