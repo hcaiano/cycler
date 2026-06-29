@@ -221,7 +221,8 @@ final class HyperKeyController {
     }
 
     private static func isMappingEmpty(_ output: String) -> Bool {
-        output.filter { !$0.isWhitespace } == "()"
+        let compact = output.filter { !$0.isWhitespace }.lowercased()
+        return compact == "()" || compact == "(null)" || compact == "null"
     }
 
     private static func isMappingOurs(_ output: String) -> Bool {
