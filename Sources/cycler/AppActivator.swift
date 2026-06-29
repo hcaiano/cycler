@@ -188,8 +188,8 @@ final class AppActivator {
     /// Index of the app's main window within the stable CGWindowID order, if any.
     private static func indexOfMain(in windows: [WindowRecord]) -> Int? {
         if let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-           let frontmostMain = windows.firstIndex(where: { $0.app.processIdentifier == frontmostPID && isMain($0.element) }) {
-            return frontmostMain
+           windows.contains(where: { $0.app.processIdentifier == frontmostPID }) {
+            return windows.firstIndex { $0.app.processIdentifier == frontmostPID && isMain($0.element) }
         }
         return windows.firstIndex { isMain($0.element) }
     }
