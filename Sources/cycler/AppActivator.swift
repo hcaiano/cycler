@@ -39,6 +39,13 @@ final class AppActivator {
         let app = Self.preferredApplication(from: apps, bundleIdentifier: bundleIdentifier, windows: windows)
         let alreadyFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleIdentifier
 
+        if windows.isEmpty, let minimizedWindow = Self.firstMinimizedWindow(of: apps) {
+            Self.activate(minimizedWindow.app)
+            Self.raise(minimizedWindow.element)
+            lastIndex.removeValue(forKey: bundleIdentifier)
+            return
+        }
+
         if !alreadyFront {
             // First press: go to the app. Show the current window position without advancing, so
             // the HUD appears consistently on the first engagement for multi-window apps.
@@ -167,6 +174,27 @@ final class AppActivator {
             }
     }
 
+    private static func firstMinimizedWindow(of apps: [NSRunningApplication]) -> WindowRecord? {
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let orderedApps = apps.sorted { lhs, rhs in
+            if lhs.processIdentifier == frontmostPID { return true }
+            if rhs.processIdentifier == frontmostPID { return false }
+            return lhs.processIdentifier < rhs.processIdentifier
+        }
+
+        for app in orderedApps {
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement],
+                  let window = windows.first(where: { isStandardWindow($0) && isMinimized($0) }) else {
+                continue
+            }
+            return WindowRecord(app: app, element: window, windowID: windowID(of: window) ?? CGWindowID(0))
+        }
+        return nil
+    }
+
     private static func isStandardWindow(_ window: AXUIElement) -> Bool {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &value) == .success,
@@ -238,6 +266,9 @@ final class AppActivator {
 
     /// Raise a window and make it the app's main/focused window.
     private static func raise(_ window: AXUIElement) {
+        if isMinimized(window) {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
