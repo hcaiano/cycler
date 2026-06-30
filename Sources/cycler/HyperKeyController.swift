@@ -229,7 +229,7 @@ final class HyperKeyController {
         }
 
         if triggerDown && (type == .keyDown || type == .keyUp) {
-            Self.replaceModifierFlags(on: event, with: hyperFlags)
+            Self.replaceModifierFlags(on: event, with: hyperFlags(preservingPhysicalModifiersFrom: event.flags))
             return Unmanaged.passUnretained(event)
         }
         return Unmanaged.passUnretained(event)
@@ -276,6 +276,14 @@ final class HyperKeyController {
         Self.modifierFlags(for: Self.modifierKeyCodes(includeShift: includeShift))
     }
 
+    private func hyperFlags(preservingPhysicalModifiersFrom currentFlags: CGEventFlags) -> CGEventFlags {
+        var raw = hyperFlags.rawValue
+        if !includeShift, currentFlags.rawValue & Self.shiftModifierRawValue != 0 {
+            raw |= Self.shiftModifierRawValue
+        }
+        return CGEventFlags(rawValue: raw)
+    }
+
     private static func modifierFlags(for keyCodes: [CGKeyCode]) -> CGEventFlags {
         let raw = keyCodes.reduce(UInt64(0)) { $0 | modifierFlagRawValue(for: $1) }
         return CGEventFlags(rawValue: raw)
@@ -292,6 +300,10 @@ final class HyperKeyController {
             CGEventFlags.maskShift.rawValue |
             CGEventFlags.maskCommand.rawValue |
             0x2b
+    }
+
+    private static var shiftModifierRawValue: UInt64 {
+        modifierFlagRawValue(for: 56)
     }
 
     private static func modifierFlagRawValue(for keyCode: CGKeyCode) -> UInt64 {
