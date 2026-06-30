@@ -7,14 +7,14 @@
     <description>Updates for Cycler, a macOS window manager.</description>
     <language>en</language>
     <item>
-      <title>Cycler 0.3.0</title>
-      <link>https://github.com/hcaiano/cycler/releases/tag/v0.3.0</link>
-      <sparkle:version>3</sparkle:version>
-      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
-      <sparkle:releaseNotesLink>https://github.com/hcaiano/cycler/releases/tag/v0.3.0</sparkle:releaseNotesLink>
+      <title>Cycler 0.4.0</title>
+      <link>https://github.com/hcaiano/cycler/releases/tag/v0.4.0</link>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
+      <sparkle:releaseNotesLink>https://github.com/hcaiano/cycler/releases/tag/v0.4.0</sparkle:releaseNotesLink>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 26 Jun 2026 15:46:10 +0000</pubDate>
-      <enclosure url="https://github.com/hcaiano/cycler/releases/download/v0.3.0/Cycler-0.3.0.dmg" type="application/octet-stream" sparkle:edSignature="akeBc2/LRNKV5+JDTAUBs5iS+KLByQ9xNicUlR3emwcywNuRgeFxccSrWfrNy2ONld2jZtp/gVXeTUCLS0Y3CQ==" length="4056542" />
+      <pubDate>Tue, 30 Jun 2026 11:24:06 +0000</pubDate>
+      <enclosure url="https://github.com/hcaiano/cycler/releases/download/v0.4.0/Cycler-0.4.0.dmg" type="application/octet-stream" sparkle:edSignature="gBtqGQc/o+MjVj5KB22jig6VikVLg3XLdhfBIPXYZ+36/7zW2s0IWwnEewRZPB9gx7N7JvW8n/LgNp7OoJilAQ==" length="4139540" />
     </item>
   </channel>
 </rss>
