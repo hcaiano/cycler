@@ -252,6 +252,7 @@ final class SettingsModel: ObservableObject {
     private func handle(_ event: NSEvent) -> Bool {
         guard let id = recordingID, let idx = rows.firstIndex(where: { $0.id == id }) else { return false }
         let keyCode = Int(event.keyCode)
+        if Self.isModifierOnlyKey(keyCode) { return true }
         let bare = !ShortcutKit.hasModifier(event.modifierFlags)
         if keyCode == kVK_Escape, bare { stopRecording(); return true }
         if keyCode == kVK_Delete, bare {
@@ -297,6 +298,16 @@ final class SettingsModel: ObservableObject {
         }
         rows.removeAll { $0.id == sourceID }
         apply()
+    }
+
+    private static func isModifierOnlyKey(_ keyCode: Int) -> Bool {
+        switch keyCode {
+        case kVK_Command, kVK_Shift, kVK_CapsLock, kVK_Option, kVK_Control,
+             kVK_RightShift, kVK_RightOption, kVK_RightControl, kVK_Function:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func appEntry(_ bundleIdentifier: String) -> AppEntry {
