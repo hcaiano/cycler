@@ -6,7 +6,9 @@ what to do next. Written for the agents picking up development from the initial 
 ## The product, in one line
 
 A macOS menu-bar utility: **bind a hotkey to an app — press it to jump there, press the same
-key again to walk through that app's windows, one at a time, wrapping around.**
+key again to walk through that app's windows, one at a time, wrapping around.** A shortcut can
+also target an ordered group of apps; in that mode the same key cycles between apps instead of
+windows.
 
 Example: `Hyper + 1` bound to Chrome. First press → Chrome comes to the front. Press again →
 Chrome's next window. Again → the next, then wrap to the first. The goal is keyboard-only window
@@ -33,8 +35,12 @@ Sparkle embedded. Verified end to end.
   - `WindowCycle.swift` — the round-robin `next(count:current:direction:)` index math. First
     engagement focuses window 0 ("go to app"); repeat presses advance with wraparound. **This is
     the heart of the behaviour and it's fully unit-tested.**
-  - `Bindings.swift` — `AppBinding` (keyCode + Carbon modifiers + bundle id) and `CyclerConfig`
-    (the Codable on-disk model).
+  - `AppGroupCycle.swift` — the stateless, pure app-group decision logic. It chooses launch,
+    activate, hide, or no-op from the configured app order plus installed/running/frontmost
+    snapshots.
+  - `Bindings.swift` — `AppBinding` (keyCode + Carbon modifiers + ordered bundle ids) and
+    `CyclerConfig` (the Codable on-disk model). It still decodes the legacy singular
+    `bundleIdentifier` key and writes the canonical `bundleIdentifiers` array.
   - `SemVer.swift` — version comparison (copied standard).
 - **`Sources/cycler/`** (AppKit agent):
   - `main.swift` — menu-bar `AppDelegate`: loads `~/.config/cycler/bindings.json`, registers a
@@ -65,12 +71,25 @@ Sparkle embedded. Verified end to end.
    state, inline searchable app picker (running apps + Dock apps + Browse…), key recorder, save,
    and live reload through the existing bindings path.
 2. **Hardened `AppActivator`.** Cycling filters AX windows to standard, non-minimized windows.
-   Minimized windows are skipped rather than un-minimized.
+   Minimized windows are skipped rather than un-minimized. Multi-window apps show the centered
+   HUD on first engagement and while cycling, so the first press does not feel visually delayed.
+   Supported Chromium-family browser profile suffixes exposed in AX window titles are parsed into
+   a leading row context (`Pessoal · …`, `GAMES.GG · …`) so profile switching is visible before
+   title truncation.
 3. **Launch a not-running app.** First press resolves the bundle id to an app URL and launches it
    with `NSWorkspace.openApplication(at:configuration:)`.
 4. **Reverse cycling.** Bindings that do not already include Shift get a generated Shift variant
    that cycles backward. Explicit user bindings win if they would collide with that generated
    variant.
+5. **App Groups.** A shortcut row can hold multiple apps. Single-app rows keep the original window
+   cycling behaviour; multi-app rows cycle running apps in the configured order. With no group
+   apps running, Cycler launches the first installed app in the group. With exactly one running,
+   repeat presses hide/show that app. Settings shows groups inline with ordered app rows,
+   drag-to-reorder plus chevron fallback controls, missing-app warnings, and live reload through
+   the same bindings path. Recording a shortcut already used by another row merges the rows into
+   one group, matching the manual `bundleIdentifiers` config shape. Launch/activate group presses
+   show the same centered HUD style as window cycling, listing the configured app order and the
+   selected app; hide/none stay silent.
 
 ## What's stubbed / next (roughly in priority order)
 

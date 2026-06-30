@@ -6,19 +6,37 @@ import AppKit
 final class CycleHUD {
     static let shared = CycleHUD()
 
+    struct WindowItem {
+        var title: String
+        var context: String?
+    }
+
+    struct AppGroupItem {
+        var name: String
+        var icon: NSImage?
+        var isRunning: Bool
+        var isSelected: Bool
+    }
+
+    private enum Mode {
+        case windows
+        case appGroup
+    }
+
     private let panel: HUDPanel
     private let iconView = NSImageView()
     private let appLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let rowStack = NSStackView()
-    private var rowViews: [WindowRow] = []
+    private var rowViews: [HUDRow] = []
     private var measureView: NSView!     // the padded content; drives the panel's fitting size
     private var dismissWorkItem: DispatchWorkItem?
     private var generation = 0
     private var shownCount = 0
+    private var shownMode: Mode?
 
     private let corner: CGFloat = 14
-    private let width: CGFloat = 320      // fixed: titles truncate, panel never resizes while cycling
+    private let width: CGFloat = 384      // fixed: titles truncate, panel never resizes while cycling
     private let maxVisibleRows = 7
 
     private init() {
@@ -39,27 +57,63 @@ final class CycleHUD {
     }
 
     /// Show the app's windows with `selectedIndex` highlighted. No-op for fewer than two windows.
-    func show(appIcon: NSImage?, appName: String, windowTitles: [String], selectedIndex: Int) {
-        guard windowTitles.count > 1 else { return }
+    func show(appIcon: NSImage?, appName: String, windows: [WindowItem], selectedIndex: Int) {
+        guard windows.count > 1 else { return }
 
         generation += 1
         dismissWorkItem?.cancel()
 
         iconView.image = appIcon
+        iconView.contentTintColor = nil
         appLabel.stringValue = appName
-        countLabel.stringValue = "\(selectedIndex + 1) of \(windowTitles.count)"
+        countLabel.stringValue = "\(selectedIndex + 1) of \(windows.count)"
 
         // Rebuild rows only when the window set changes; otherwise just move the highlight so the
         // panel never resizes or flickers mid-cycle.
-        let window = visibleWindow(count: windowTitles.count, selected: selectedIndex)
-        let slice = Array(windowTitles[window])
-        if slice.count != shownCount { rebuildRows(slice.count) }
+        let window = visibleWindow(count: windows.count, selected: selectedIndex)
+        let slice = Array(windows[window])
+        if slice.count != shownCount || shownMode != .windows { rebuildRows(slice.count, mode: .windows) }
         shownCount = slice.count
         for (offset, row) in rowViews.enumerated() {
             let absolute = window.lowerBound + offset
-            row.update(title: slice[offset], selected: absolute == selectedIndex)
+            row.update(
+                title: slice[offset].title,
+                selected: absolute == selectedIndex,
+                context: slice[offset].context)
         }
 
+        present()
+    }
+
+    /// Show a multi-app shortcut's configured order, with the chosen app highlighted.
+    func showAppGroup(apps: [AppGroupItem], selectedIndex: Int) {
+        guard apps.count > 1, apps.indices.contains(selectedIndex) else { return }
+
+        generation += 1
+        dismissWorkItem?.cancel()
+
+        iconView.image = Self.groupIcon()
+        iconView.contentTintColor = NSColor.white.withAlphaComponent(0.86)
+        appLabel.stringValue = "App Group"
+        countLabel.stringValue = "\(apps.count) apps"
+
+        let window = visibleWindow(count: apps.count, selected: selectedIndex)
+        let slice = Array(apps[window])
+        if slice.count != shownCount || shownMode != .appGroup { rebuildRows(slice.count, mode: .appGroup) }
+        shownCount = slice.count
+        for (offset, row) in rowViews.enumerated() {
+            row.update(
+                title: slice[offset].name,
+                selected: slice[offset].isSelected,
+                icon: slice[offset].icon,
+                dimmed: !slice[offset].isRunning && !slice[offset].isSelected,
+                reserveIcon: true)
+        }
+
+        present()
+    }
+
+    private func present() {
         if let content = measureView {
             content.layoutSubtreeIfNeeded()
             let size = NSSize(width: width, height: content.fittingSize.height)
@@ -97,11 +151,12 @@ final class CycleHUD {
         }
     }
 
-    private func rebuildRows(_ count: Int) {
+    private func rebuildRows(_ count: Int, mode: Mode) {
         rowViews.forEach { $0.removeFromSuperview() }
-        rowViews = (0..<count).map { _ in WindowRow() }
+        rowViews = (0..<count).map { _ in HUDRow() }
         rowViews.forEach { rowStack.addArrangedSubview($0) }
         rowViews.forEach { $0.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true }
+        shownMode = mode
     }
 
     private func visibleWindow(count: Int, selected: Int) -> Range<Int> {
@@ -207,12 +262,21 @@ final class CycleHUD {
         image.resizingMode = .stretch
         return image
     }
+
+    private static func groupIcon() -> NSImage? {
+        let image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: nil)
+        image?.isTemplate = true
+        return image
+    }
 }
 
-/// One window in the switcher. Reused across presses; only its title and selection change, so the
+/// One row in the switcher. Reused across presses; only its content and selection change, so the
 /// panel layout stays stable (no resize, no text jump).
-private final class WindowRow: NSView {
+private final class HUDRow: NSView {
+    private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "")
+    private var iconWidth: NSLayoutConstraint!
+    private var iconSpacing: NSLayoutConstraint!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -220,29 +284,80 @@ private final class WindowRow: NSView {
         wantsLayer = true
         layer?.cornerRadius = 7
 
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         label.cell?.usesSingleLineMode = true
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
 
+        iconWidth = iconView.widthAnchor.constraint(equalToConstant: 0)
+        iconSpacing = label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 0)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 28),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.heightAnchor.constraint(equalToConstant: 18),
+            iconWidth,
+            iconSpacing,
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(title: String, selected: Bool) {
-        label.stringValue = title.isEmpty ? "Untitled" : title
-        label.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
-        label.textColor = selected ? .white : NSColor.white.withAlphaComponent(0.7)
+    func update(
+        title: String,
+        selected: Bool,
+        context: String? = nil,
+        icon: NSImage? = nil,
+        dimmed: Bool = false,
+        reserveIcon: Bool = false
+    ) {
+        let hasIcon = icon != nil
+        iconView.image = icon
+        iconView.isHidden = !hasIcon
+        iconView.alphaValue = selected ? 1 : (dimmed ? 0.38 : 0.78)
+        iconWidth.constant = (hasIcon || reserveIcon) ? 18 : 0
+        iconSpacing.constant = (hasIcon || reserveIcon) ? 8 : 0
+        label.attributedStringValue = Self.titleString(
+            title: title.isEmpty ? "Untitled" : title,
+            context: context,
+            selected: selected,
+            dimmed: dimmed)
         // A soft white wash for the selection — subtle, not a loud brand pill.
         layer?.backgroundColor = selected
             ? NSColor.white.withAlphaComponent(0.18).cgColor
             : NSColor.clear.cgColor
+    }
+
+    private static func titleString(title: String, context: String?, selected: Bool, dimmed: Bool) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let titleColor = selected ? NSColor.white : NSColor.white.withAlphaComponent(dimmed ? 0.42 : 0.7)
+        if let context = context?.trimmingCharacters(in: .whitespacesAndNewlines), !context.isEmpty {
+            result.append(NSAttributedString(
+                string: context,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                    .foregroundColor: selected ? NSColor.white : NSColor.white.withAlphaComponent(0.84),
+                ]))
+            result.append(NSAttributedString(
+                string: " · ",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+                    .foregroundColor: NSColor.white.withAlphaComponent(selected ? 0.58 : 0.44),
+                ]))
+        }
+        result.append(NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: selected ? .semibold : .regular),
+                .foregroundColor: titleColor,
+            ]))
+        return result
     }
 }
 

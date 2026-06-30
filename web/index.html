@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cycler · Jump to an app, then walk its windows on macOS</title>
-  <meta name="description" content="Cycler is a free, open-source macOS menu-bar utility. Bind a hotkey to an app: press it to jump there, press the same key again to step through that app's windows, one at a time. Keyboard-only window navigation, no Dock or Mission Control.">
+  <title>Cycler · App and window shortcuts for macOS</title>
+  <meta name="description" content="Cycler is a free, open-source macOS menu-bar utility. Bind shortcuts to apps, cycle an app's windows, or group related apps under one key. Keyboard-only navigation, no Dock or Mission Control.">
   <link rel="canonical" href="https://cycler.caiano.com/">
   <meta name="theme-color" content="#F2580E">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://cycler.caiano.com/">
-  <meta property="og:title" content="Cycler · Jump to an app, then walk its windows on macOS">
-  <meta property="og:description" content="Bind a hotkey to an app. First press jumps to it; press again to cycle that app's windows, one at a time. A tiny, native macOS menu-bar utility.">
+  <meta property="og:title" content="Cycler · App and window shortcuts for macOS">
+  <meta property="og:description" content="Bind shortcuts to apps, cycle windows, or group related apps under one key. A tiny, native macOS menu-bar utility.">
   <meta property="og:image" content="https://cycler.caiano.com/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -20,8 +20,8 @@
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Cycler · Jump to an app, then walk its windows on macOS">
-  <meta name="twitter:description" content="Bind a hotkey to an app. First press jumps to it; press again to cycle that app's windows, one at a time. Native macOS, lives in the menu bar.">
+  <meta name="twitter:title" content="Cycler · App and window shortcuts for macOS">
+  <meta name="twitter:description" content="Bind shortcuts to apps, cycle windows, or group related apps under one key. Native macOS, lives in the menu bar.">
   <meta name="twitter:image" content="https://cycler.caiano.com/assets/og.png">
 
   <!-- Icons -->
@@ -39,7 +39,7 @@
     "operatingSystem": "macOS 13.0 or later",
     "url": "https://cycler.caiano.com/",
     "downloadUrl": "https://github.com/hcaiano/cycler/releases/latest",
-    "description": "A free macOS menu-bar utility. Bind a hotkey to an app to jump to it, then press again to cycle that app's windows one at a time.",
+    "description": "A free macOS menu-bar utility. Bind shortcuts to apps, cycle windows, or group related apps under one key.",
     "image": "https://cycler.caiano.com/assets/og.png",
     "license": "https://github.com/hcaiano/cycler/blob/main/LICENSE",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -63,10 +63,10 @@
   <main>
     <section class="hero">
       <img class="hero-icon" src="/assets/icon.png" alt="Cycler app icon" width="96" height="96">
-      <h1>Jump to an app. Press again to walk its windows.</h1>
+      <h1>Jump to an app and cycle its windows. Group apps under one key.</h1>
       <p class="lede">
-        Bind a hotkey to an app. Press it to jump there; press it again to step through that app's
-        windows. It lives in the menu bar, no Dock or Mission Control needed.
+        Bind a shortcut to an app. Press it to jump there, press it again to step through that
+        app's windows. Bind several apps to one key when you use them as a group.
       </p>
       <div class="cta">
         <a class="btn btn-primary" href="https://github.com/hcaiano/cycler/releases/latest" rel="noopener">
@@ -85,7 +85,7 @@
           </span>
           <span class="hud" aria-hidden="true">
             <span class="hud-icon"></span>
-            <span class="hud-title">Documents</span>
+            <span class="hud-title">Work · Docs</span>
             <span class="hud-pos">2 / 4</span>
           </span>
         </div>
@@ -128,14 +128,34 @@
 
       <div class="feature">
         <div class="feature-copy">
+          <h2>Group apps under one key</h2>
+          <p>Bind one shortcut to several apps. Press it to move between them in the order you
+            choose. If one isn't open yet, the first press launches it.</p>
+        </div>
+        <div class="feature-art">
+          <div class="group-flow" aria-hidden="true">
+            <span class="cap is-active">⌃⌥⇧⌘<b>1</b></span>
+            <span class="flow-arrow">→</span>
+            <span class="app-strip">
+              <span class="app-square is-active"></span>
+              <span class="app-square"></span>
+              <span class="app-square"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature">
+        <div class="feature-copy">
           <h2>See where you are</h2>
           <p>A small overlay shows the window's title and your spot in the cycle
-            (<span class="mono">2 / 4</span>), then disappears. It never takes focus.</p>
+            (<span class="mono">2 / 4</span>), then disappears. With Chrome and similar browsers,
+            it shows the profile too, so you can tell Work from Personal.</p>
         </div>
         <div class="feature-art">
           <span class="hud hud-static" aria-hidden="true">
             <span class="hud-icon"></span>
-            <span class="hud-title">Downloads</span>
+            <span class="hud-title">Work · Downloads</span>
             <span class="hud-pos">3 / 4</span>
           </span>
         </div>

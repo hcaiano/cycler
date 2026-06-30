@@ -11,7 +11,7 @@ private struct HotkeyCombo: Hashable {
 }
 
 private struct FailedHotkey {
-    var bundleIdentifier: String
+    var label: String
     var keyCode: Int
     var modifiers: UInt32
     var status: OSStatus
@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trustTimer: Timer?
     private var trustPollTicks = 0
     private var settingsWindowController: SettingsWindowController?
+    private let hyperKeyController = HyperKeyController()
+    private var hyperKeySignalSources: [DispatchSourceSignal] = []
 
     /// `~/.config/cycler/bindings.json` — the user's per-app hotkey bindings.
     static var configURL: URL {
@@ -48,8 +50,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AppUpdater.shared  // start Sparkle's scheduled background update checks
         reloadConfig()
         registerHotkeys()
+        applyHyperKeySettings()
         buildStatusItem()
         startAccessibilityWatch()
+        installHyperKeySignalCleanup()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil)
     }
 
     // MARK: - Config
@@ -62,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            config = try CyclerConfig.decode(data)
+            config = try CyclerConfig.decode(data).coalescingDuplicateShortcuts()
         } catch {
             // Malformed file: surface it, keep an empty config, do NOT overwrite the file.
             FileHandle.standardError.write(Data("bindings file could not be loaded (left untouched): \(error)\n".utf8))
@@ -79,13 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var failed: [FailedHotkey] = []
         let explicitCombos = Set(config.bindings.map { HotkeyCombo(keyCode: $0.keyCode, modifiers: $0.modifiers) })
         for b in config.bindings {
-            let bundleID = b.bundleIdentifier
+            let binding = b
             let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: b.modifiers) {
-                AppActivator.shared.engage(bundleIdentifier: bundleID)
+                self.engage(binding, direction: .forward)
             }
             if status != noErr {
                 failed.append(FailedHotkey(
-                    bundleIdentifier: b.bundleIdentifier,
+                    label: bindingTitle(for: b.bundleIdentifiers),
                     keyCode: b.keyCode,
                     modifiers: b.modifiers,
                     status: status,
@@ -98,13 +107,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let combo = HotkeyCombo(keyCode: b.keyCode, modifiers: backwardModifiers)
             guard !explicitCombos.contains(combo) else { continue }
 
-            let bundleID = b.bundleIdentifier
+            let binding = b
             let status = HotkeyManager.shared.register(keyCode: b.keyCode, modifiers: backwardModifiers) {
-                AppActivator.shared.engage(bundleIdentifier: bundleID, direction: .backward)
+                self.engage(binding, direction: .backward)
             }
             if status != noErr {
                 failed.append(FailedHotkey(
-                    bundleIdentifier: b.bundleIdentifier,
+                    label: bindingTitle(for: b.bundleIdentifiers),
                     keyCode: b.keyCode,
                     modifiers: backwardModifiers,
                     status: status,
@@ -118,6 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateFailedHotkeyRetryTimer()
     }
 
+    private func engage(_ binding: AppBinding, direction: WindowCycle.Direction) {
+        if binding.isGroup {
+            AppActivator.shared.engageGroup(bundleIdentifiers: binding.bundleIdentifiers, direction: direction)
+        } else {
+            AppActivator.shared.engage(bundleIdentifier: binding.bundleIdentifier, direction: direction)
+        }
+    }
+
     @objc private func retryHotkeys() {
         HotkeyManager.shared.unregisterAll()
         registerHotkeys()
@@ -125,9 +142,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reloadBindings() {
+        hotkeysSuspended = false
         HotkeyManager.shared.unregisterAll()
         reloadConfig()
         registerHotkeys()
+        applyHyperKeySettings()
         buildStatusItem()
     }
 
@@ -147,7 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             try FileManager.default.copyItem(at: url, to: backup)
         }
-        try newConfig.encoded().write(to: url, options: .atomic)
+        try newConfig.coalescingDuplicateShortcuts().encoded().write(to: url, options: .atomic)
+        hotkeysSuspended = false
         reloadBindings()
     }
 
@@ -160,6 +180,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             registerHotkeys()
         }
+        buildStatusItem()
+    }
+
+    private func applyHyperKeySettings() {
+        hyperKeyController.apply(config.hyperKey)
+        if case .blocked(let message) = hyperKeyController.state {
+            FileHandle.standardError.write(Data("Cycler HyperKey blocked: \(message)\n".utf8))
+        }
+    }
+
+    private func installHyperKeySignalCleanup() {
+        guard hyperKeySignalSources.isEmpty else { return }
+        for signal in [SIGINT, SIGTERM, SIGHUP] {
+            Darwin.signal(signal, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signal, queue: .main)
+            source.setEventHandler { [weak self] in
+                self?.hyperKeyController.stop()
+                fflush(stderr)
+                exit(128 + signal)
+            }
+            source.resume()
+            hyperKeySignalSources.append(source)
+        }
+    }
+
+    @objc private func systemDidWake() {
+        applyHyperKeySettings()
         buildStatusItem()
     }
 
@@ -187,14 +234,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func applicationBecameActive() {
         retryFailedHotkeys()
+        if hyperKeyController.needsInputMonitoring {
+            applyHyperKeySettings()
+            buildStatusItem()
+        }
     }
 
     private func logHotkeyFailure(_ failure: FailedHotkey) {
         let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
-        let name = appName(for: failure.bundleIdentifier)
         let direction = failure.generatedReverse ? " reverse" : ""
         FileHandle.standardError.write(Data(
-            "RegisterEventHotKey failed (\(failure.status)) for\(direction) \(name) \(combo) key \(failure.keyCode)\n".utf8))
+            "RegisterEventHotKey failed (\(failure.status)) for\(direction) \(failure.label) \(combo) key \(failure.keyCode)\n".utf8))
     }
 
     // MARK: - Accessibility watch
@@ -257,6 +307,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             addInfo(menu, "⚠︎ bindings.json couldn't be loaded")
             hasWarning = true
         }
+        if let status = hyperKeyController.menuStatus {
+            addInfo(menu, status)
+            if hyperKeyController.needsInputMonitoring {
+                menu.addItem(menuItem("Grant Input Monitoring…", #selector(openInputMonitoringSettings), symbol: "keyboard"))
+            }
+            hasWarning = true
+        }
         if hasWarning { menu.addItem(.separator()) }
 
         if config.bindings.isEmpty {
@@ -302,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func blockedHotkeyTitle(_ failure: FailedHotkey) -> String {
         let prefix = failure.generatedReverse ? "Reverse " : ""
         let combo = ShortcutKit.display(keyCode: failure.keyCode, modifiers: failure.modifiers)
-        return "\(prefix)\(appName(for: failure.bundleIdentifier)) \(combo) — \(hotkeyStatusDescription(failure.status))"
+        return "\(prefix)\(failure.label) \(combo) — \(hotkeyStatusDescription(failure.status))"
     }
 
     private func hotkeyStatusDescription(_ status: OSStatus) -> String {
@@ -318,6 +375,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return name.isEmpty ? url.deletingPathExtension().lastPathComponent : name
     }
 
+    private func bindingTitle(for bundleIdentifiers: [String]) -> String {
+        let names = bundleIdentifiers.map(appName)
+        switch names.count {
+        case 0:
+            return "Empty group"
+        case 1:
+            return names[0]
+        case 2, 3:
+            return names.joined(separator: " + ")
+        default:
+            return "\(names[0]) + \(names[1]) + \(names.count - 2) more"
+        }
+    }
+
     @objc private func showAbout() { AboutWindowController.show() }
 
     @objc private func showSettings() {
@@ -326,7 +397,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController = SettingsWindowController(context: SettingsContext(
                 config: { [weak self] in self?.config ?? CyclerConfig() },
                 saveConfig: { [weak self] newConfig in try self?.saveConfigAndReload(newConfig) },
-                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) }
+                setRecording: { [weak self] recording in self?.setRecordingShortcut(recording) },
+                hyperKeyStatus: { [weak self] in self?.hyperKeyController.settingsStatus },
+                openInputMonitoringSettings: { [weak self] in self?.openInputMonitoringSettings() }
             ))
         }
         DispatchQueue.main.async { [weak self] in
@@ -356,6 +429,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Request Input Monitoring for the Hyper Key event tap and open the exact privacy pane in case
+    /// macOS has already recorded a denial and will not show the prompt again.
+    @objc private func openInputMonitoringSettings() {
+        _ = CGRequestListenEventAccess()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hyperKeyController.stop()
     }
 
     @objc private func quit() { NSApp.terminate(nil) }

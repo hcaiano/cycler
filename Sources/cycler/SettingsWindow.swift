@@ -9,6 +9,8 @@ struct SettingsContext {
     var config: () -> CyclerConfig
     var saveConfig: (CyclerConfig) throws -> Void
     var setRecording: (Bool) -> Void
+    var hyperKeyStatus: () -> String?
+    var openInputMonitoringSettings: () -> Void
 }
 
 // MARK: - Window controller (AppKit shell hosting a SwiftUI view)
@@ -70,30 +72,58 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 // MARK: - Model
 
 final class SettingsModel: ObservableObject {
-    struct Row: Identifiable {
-        let id = UUID()
+    struct AppEntry: Identifiable, Equatable {
         var bundleIdentifier: String
         var name: String
         var icon: NSImage?
+        var installed: Bool
+        var id: String { bundleIdentifier }
+    }
+
+    struct Row: Identifiable {
+        let id = UUID()
+        var apps: [AppEntry]
         var keyCode: Int?
         var modifiers: UInt32?
 
+        var isGroup: Bool { apps.count > 1 }
+        var missingCount: Int { apps.filter { !$0.installed }.count }
+        var title: String {
+            guard !apps.isEmpty else { return "Empty Shortcut" }
+            if apps.count <= 2 { return apps.map(\.name).joined(separator: " + ") }
+            return "\(apps[0].name) + \(apps[1].name) + \(apps.count - 2) more"
+        }
+        var detailText: String {
+            if missingCount > 0 {
+                return missingCount == 1 ? "1 app not installed" : "\(missingCount) apps not installed"
+            }
+            return isGroup ? "First app launches when none are running" : "Cycles windows"
+        }
         var shortcutText: String {
             guard let keyCode, let modifiers else { return "" }
             return ShortcutKit.display(keyCode: keyCode, modifiers: modifiers)
         }
         var binding: AppBinding? {
-            guard let keyCode, let modifiers else { return nil }
-            return AppBinding(keyCode: keyCode, modifiers: modifiers, bundleIdentifier: bundleIdentifier)
+            guard let keyCode, let modifiers, !apps.isEmpty else { return nil }
+            return AppBinding(
+                keyCode: keyCode,
+                modifiers: modifiers,
+                bundleIdentifiers: apps.map(\.bundleIdentifier))
         }
     }
 
     struct AlertItem: Identifiable { let id = UUID(); let title: String; let message: String }
+    struct PickerRequest: Identifiable {
+        let id = UUID()
+        var targetRowID: UUID?
+    }
 
     @Published var rows: [Row] = []
     @Published var recordingID: UUID?
-    @Published var showPicker = false
+    @Published var pickerRequest: PickerRequest?
     @Published var alert: AlertItem?
+    @Published var hyperKey: HyperKeySettings = .disabled
+    @Published var hyperKeyStatus: String?
 
     private let ctx: SettingsContext
     private var monitor: Any?
@@ -103,23 +133,52 @@ final class SettingsModel: ObservableObject {
         reload()
     }
 
-    var boundIdentifiers: Set<String> { Set(rows.map(\.bundleIdentifier)) }
+    var boundIdentifiers: Set<String> {
+        Set(rows.flatMap { row in row.apps.map(\.bundleIdentifier) })
+    }
 
     func reload() {
         stopRecording()
-        rows = ctx.config().bindings.map { b in
-            Row(bundleIdentifier: b.bundleIdentifier,
-                name: AppInfo.name(forBundleIdentifier: b.bundleIdentifier),
-                icon: AppInfo.icon(forBundleIdentifier: b.bundleIdentifier),
+        let config = ctx.config()
+        rows = config.bindings.map { b in
+            Row(apps: b.bundleIdentifiers.map(Self.appEntry),
                 keyCode: b.keyCode, modifiers: b.modifiers)
+        }
+        hyperKey = config.hyperKey
+        hyperKeyStatus = ctx.hyperKeyStatus()
+    }
+
+    func showAddShortcutPicker() {
+        stopRecording()
+        pickerRequest = PickerRequest(targetRowID: nil)
+    }
+
+    func showAddAppPicker(for row: Row) {
+        stopRecording()
+        pickerRequest = PickerRequest(targetRowID: row.id)
+    }
+
+    func finishPicking(_ choice: AppChoice?, request: PickerRequest) {
+        guard let choice else { return }
+        if let rowID = request.targetRowID {
+            add(choice, to: rowID)
+        } else {
+            addShortcut(choice)
         }
     }
 
-    func add(_ choice: AppChoice) {
-        let row = Row(bundleIdentifier: choice.bundleIdentifier, name: choice.name, icon: choice.icon)
+    func addShortcut(_ choice: AppChoice) {
+        let row = Row(apps: [Self.appEntry(for: choice)])
         rows.append(row)
         // Drop straight into recording the new row's shortcut.
         DispatchQueue.main.async { [weak self] in self?.startRecording(row.id) }
+    }
+
+    func add(_ choice: AppChoice, to rowID: UUID) {
+        guard let idx = rows.firstIndex(where: { $0.id == rowID }),
+              !boundIdentifiers.contains(choice.bundleIdentifier) else { return }
+        rows[idx].apps.append(Self.appEntry(for: choice))
+        apply()
     }
 
     func remove(_ row: Row) {
@@ -128,8 +187,47 @@ final class SettingsModel: ObservableObject {
         apply()
     }
 
+    func remove(_ app: AppEntry, from row: Row) {
+        guard let rowIdx = rows.firstIndex(where: { $0.id == row.id }) else { return }
+        rows[rowIdx].apps.removeAll { $0.bundleIdentifier == app.bundleIdentifier }
+        if rows[rowIdx].apps.isEmpty {
+            rows.remove(at: rowIdx)
+        }
+        apply()
+    }
+
+    func move(_ app: AppEntry, in row: Row, by offset: Int) {
+        guard let rowIdx = rows.firstIndex(where: { $0.id == row.id }),
+              let appIdx = rows[rowIdx].apps.firstIndex(of: app) else { return }
+        let maxIdx = rows[rowIdx].apps.count - 1
+        let newIdx = min(max(appIdx + offset, 0), maxIdx)
+        guard newIdx != appIdx else { return }
+        let moved = rows[rowIdx].apps.remove(at: appIdx)
+        rows[rowIdx].apps.insert(moved, at: newIdx)
+        apply()
+    }
+
     func toggleRecording(_ id: UUID) {
         if recordingID == id { stopRecording() } else { startRecording(id) }
+    }
+
+    func setHyperKeyEnabled(_ enabled: Bool) {
+        hyperKey.enabled = enabled
+        apply()
+    }
+
+    func setHyperKeyTrigger(_ trigger: TriggerKey) {
+        hyperKey.triggerKey = trigger
+        apply()
+    }
+
+    func setHyperKeyIncludeShift(_ includeShift: Bool) {
+        hyperKey.includeShift = includeShift
+        apply()
+    }
+
+    func openInputMonitoringSettings() {
+        ctx.openInputMonitoringSettings()
     }
 
     func startRecording(_ id: UUID) {
@@ -154,6 +252,7 @@ final class SettingsModel: ObservableObject {
     private func handle(_ event: NSEvent) -> Bool {
         guard let id = recordingID, let idx = rows.firstIndex(where: { $0.id == id }) else { return false }
         let keyCode = Int(event.keyCode)
+        if Self.isModifierOnlyKey(keyCode) { return true }
         let bare = !ShortcutKit.hasModifier(event.modifierFlags)
         if keyCode == kVK_Escape, bare { stopRecording(); return true }
         if keyCode == kVK_Delete, bare {
@@ -164,9 +263,9 @@ final class SettingsModel: ObservableObject {
 
         let mods = ShortcutKit.carbonModifiers(from: event.modifierFlags)
         if let other = rows.firstIndex(where: { $0.id != id && $0.keyCode == keyCode && $0.modifiers == mods }) {
-            stopRecording(); NSSound.beep()
-            alert = AlertItem(title: "That shortcut is taken.",
-                message: "\(ShortcutKit.display(keyCode: keyCode, modifiers: mods)) is already used by \(rows[other].name). Pick a different one.")
+            let targetID = rows[other].id
+            stopRecording()
+            merge(rowID: id, into: targetID)
             return true
         }
         rows[idx].keyCode = keyCode
@@ -178,9 +277,49 @@ final class SettingsModel: ObservableObject {
     /// Persist only complete rows (app + shortcut) and live-reload hotkeys; native apps apply
     /// immediately, and an incomplete row stays visible until its shortcut is recorded.
     private func apply() {
-        let config = CyclerConfig(bindings: rows.compactMap(\.binding))
-        do { try ctx.saveConfig(config) }
+        let config = CyclerConfig(bindings: rows.compactMap(\.binding), hyperKey: hyperKey)
+            .coalescingDuplicateShortcuts()
+        do {
+            try ctx.saveConfig(config)
+            hyperKeyStatus = ctx.hyperKeyStatus()
+        }
         catch { alert = AlertItem(title: "Couldn’t save your shortcuts.", message: error.localizedDescription) }
+    }
+
+    private func merge(rowID sourceID: UUID, into targetID: UUID) {
+        guard sourceID != targetID,
+              let sourceIdx = rows.firstIndex(where: { $0.id == sourceID }),
+              let targetIdx = rows.firstIndex(where: { $0.id == targetID }) else { return }
+
+        var seen = Set(rows[targetIdx].apps.map(\.bundleIdentifier))
+        for app in rows[sourceIdx].apps where !seen.contains(app.bundleIdentifier) {
+            rows[targetIdx].apps.append(app)
+            seen.insert(app.bundleIdentifier)
+        }
+        rows.removeAll { $0.id == sourceID }
+        apply()
+    }
+
+    private static func isModifierOnlyKey(_ keyCode: Int) -> Bool {
+        switch keyCode {
+        case kVK_Command, kVK_Shift, kVK_CapsLock, kVK_Option, kVK_Control,
+             kVK_RightShift, kVK_RightOption, kVK_RightControl, kVK_Function:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func appEntry(_ bundleIdentifier: String) -> AppEntry {
+        let installed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+        return AppEntry(bundleIdentifier: bundleIdentifier,
+                        name: AppInfo.name(forBundleIdentifier: bundleIdentifier),
+                        icon: AppInfo.icon(forBundleIdentifier: bundleIdentifier),
+                        installed: installed)
+    }
+
+    private static func appEntry(for choice: AppChoice) -> AppEntry {
+        AppEntry(bundleIdentifier: choice.bundleIdentifier, name: choice.name, icon: choice.icon, installed: true)
     }
 }
 
@@ -190,16 +329,41 @@ struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
+        TabView {
+            ShortcutsTab(model: model)
+                .tabItem { Label("Shortcuts", systemImage: "command") }
+            HyperKeyTab(model: model)
+                .tabItem { Label("Hyper Key", systemImage: "capslock") }
+        }
+        .frame(minWidth: 480, minHeight: 420)
+        .sheet(item: $model.pickerRequest) { request in
+            AppPickerView(excluding: model.boundIdentifiers) { choice in
+                model.finishPicking(choice, request: request)
+            }
+        }
+        .alert(item: $model.alert) { a in
+            Alert(title: Text(a.title), message: Text(a.message), dismissButton: .default(Text("OK")))
+        }
+    }
+}
+
+/// The primary page: the list of app shortcuts. Hyper Key lives on its own tab so this stays
+/// focused on the one thing most users come here to do.
+private struct ShortcutsTab: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shortcuts").font(.system(size: 22, weight: .bold))
-                Text("Press a shortcut to jump to its app. Press it again to step through that app’s windows.")
+                Text("Use one app to cycle windows, or add multiple apps to cycle between them.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+            Divider()
 
             if model.rows.isEmpty {
-                EmptyStateView { model.showPicker = true }
+                EmptyStateView { model.showAddShortcutPicker() }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
@@ -213,7 +377,7 @@ struct SettingsRootView: View {
 
             Divider()
             HStack {
-                Button { model.showPicker = true } label: {
+                Button { model.showAddShortcutPicker() } label: {
                     Label("Add Shortcut", systemImage: "plus")
                 }
                 .controlSize(.large)
@@ -221,15 +385,85 @@ struct SettingsRootView: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 480, minHeight: 420)
-        .sheet(isPresented: $model.showPicker) {
-            AppPickerView(excluding: model.boundIdentifiers) { choice in
-                if let choice { model.add(choice) }
+    }
+}
+
+/// Secondary, rarely-touched settings: the optional built-in Hyper Key. A grouped Form is the
+/// native macOS-settings shape and keeps this off the primary Shortcuts page.
+private struct HyperKeyTab: View {
+    @ObservedObject var model: SettingsModel
+
+    private var enabled: Binding<Bool> {
+        Binding(get: { model.hyperKey.enabled }, set: { model.setHyperKeyEnabled($0) })
+    }
+
+    private var trigger: Binding<TriggerKey> {
+        Binding(get: { model.hyperKey.triggerKey }, set: { model.setHyperKeyTrigger($0) })
+    }
+
+    private var includeShift: Binding<Bool> {
+        Binding(get: { model.hyperKey.includeShift }, set: { model.setHyperKeyIncludeShift($0) })
+    }
+
+    private var shortcutHint: String {
+        model.hyperKey.includeShift ? "Records shortcuts as ⌃⌥⇧⌘." : "Records shortcuts as ⌃⌥⌘."
+    }
+
+    private var blockedStatus: String? {
+        guard let status = model.hyperKeyStatus, status.hasPrefix("Blocked") else { return nil }
+        return status
+    }
+
+    private var inputMonitoringBlocked: Bool {
+        blockedStatus?.contains("Input Monitoring") == true
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable Hyper Key", isOn: enabled)
+            } footer: {
+                Text("Turns one key into a system-wide Hyper modifier, so you don't need Karabiner or Raycast. Off by default.")
+            }
+
+            if model.hyperKey.enabled {
+                Section {
+                    Picker("Trigger key", selection: trigger) {
+                        ForEach(TriggerKey.allCases, id: \.self) { key in
+                            Text(key.displayName).tag(key)
+                        }
+                    }
+                    Toggle("Include Shift (⇧)", isOn: includeShift)
+                        .help("Adds ⇧ so Hyper is ⌃⌥⇧⌘.")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(shortcutHint)
+                        if model.hyperKey.triggerKey == .capsLock {
+                            Text("Caps Lock is remapped while Cycler runs and restored when you switch keys or quit.")
+                        }
+                    }
+                }
+
+                if let blockedStatus {
+                    Section {
+                        Label(blockedStatus, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        if inputMonitoringBlocked {
+                            Button {
+                                model.openInputMonitoringSettings()
+                            } label: {
+                                Label("Open Input Monitoring", systemImage: "keyboard")
+                            }
+                        }
+                    } footer: {
+                        if inputMonitoringBlocked {
+                            Text("Allow Cycler in System Settings, then return to Cycler; Hyper Key will retry when the app becomes active.")
+                        }
+                    }
+                }
             }
         }
-        .alert(item: $model.alert) { a in
-            Alert(title: Text(a.title), message: Text(a.message), dismissButton: .default(Text("OK")))
-        }
+        .formStyle(.grouped)
     }
 }
 
@@ -240,24 +474,159 @@ private struct BindingRowView: View {
     private var isRecording: Bool { model.recordingID == row.id }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: row.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
-                .resizable().frame(width: 26, height: 26)
-            Text(row.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
-            Spacer(minLength: 12)
-            ShortcutField(text: row.shortcutText, isRecording: isRecording) {
-                model.toggleRecording(row.id)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                AppIconStack(apps: row.apps)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    Text(row.detailText).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                ShortcutField(text: row.shortcutText, isRecording: isRecording) {
+                    model.toggleRecording(row.id)
+                }
+                Button {
+                    model.showAddAppPicker(for: row)
+                } label: {
+                    Image(systemName: "plus.circle").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Add app to this shortcut")
+                .accessibilityLabel("Add app to \(row.title)")
+                Button {
+                    model.remove(row)
+                } label: {
+                    Image(systemName: "minus.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove shortcut")
+                .accessibilityLabel("Remove shortcut for \(row.title)")
             }
-            Button {
-                model.remove(row)
-            } label: {
-                Image(systemName: "minus.circle.fill").foregroundStyle(.tertiary)
+
+            if row.isGroup {
+                GroupAppList(row: row, model: model)
+                    .padding(.leading, 38)
             }
-            .buttonStyle(.borderless)
-            .help("Remove")
-            .accessibilityLabel("Remove shortcut for \(row.name)")
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct AppIconStack: View {
+    let apps: [SettingsModel.AppEntry]
+
+    var body: some View {
+        let visibleApps = apps.count > 3 ? Array(apps.prefix(2)) : Array(apps.prefix(3))
+        HStack(spacing: -6) {
+            ForEach(visibleApps) { app in
+                Image(nsImage: app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
+                    .resizable()
+                    .frame(width: 26, height: 26)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+            }
+            if apps.count > 3 {
+                Text("+\(apps.count - visibleApps.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .frame(width: 66, alignment: .leading)
+    }
+}
+
+private struct GroupAppList: View {
+    let row: SettingsModel.Row
+    @ObservedObject var model: SettingsModel
+    @State private var draggingID: String?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(Array(row.apps.enumerated()), id: \.element.id) { idx, app in
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .help("Drag to reorder")
+                    Text("\(idx + 1)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, alignment: .trailing)
+                    Image(nsImage: app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle))
+                        .resizable().frame(width: 18, height: 18)
+                    Text(app.name).font(.caption).lineLimit(1)
+                    if idx == 0 {
+                        Label("Primary", systemImage: "flag.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Launches first when none of the group apps are running")
+                    }
+                    if !app.installed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("App not installed")
+                    }
+                    Spacer(minLength: 8)
+                    Button {
+                        model.move(app, in: row, by: -1)
+                    } label: {
+                        Image(systemName: "chevron.up").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(idx == 0)
+                    .help("Move up")
+                    .accessibilityLabel("Move \(app.name) up")
+                    Button {
+                        model.move(app, in: row, by: 1)
+                    } label: {
+                        Image(systemName: "chevron.down").font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(idx == row.apps.count - 1)
+                    .help("Move down")
+                    .accessibilityLabel("Move \(app.name) down")
+                    Button {
+                        model.remove(app, from: row)
+                    } label: {
+                        Image(systemName: "minus.circle").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove app from group")
+                    .accessibilityLabel("Remove \(app.name) from group")
+                }
+                .padding(.vertical, 2)
+                .opacity(app.installed ? 1 : 0.55)
+                .background(draggingID == app.bundleIdentifier ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.12) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 4)
+                    .onChanged { _ in
+                        draggingID = app.bundleIdentifier
+                    }
+                    .onEnded { value in
+                        let rowHeight: CGFloat = 26
+                        let offset = Int((value.translation.height / rowHeight).rounded())
+                        if offset != 0 {
+                            model.move(app, in: row, by: offset)
+                        }
+                        draggingID = nil
+                    })
+                .accessibilityAction(named: "Move Up") {
+                    model.move(app, in: row, by: -1)
+                }
+                .accessibilityAction(named: "Move Down") {
+                    model.move(app, in: row, by: 1)
+                }
+                .onDisappear {
+                    if draggingID == app.bundleIdentifier {
+                        draggingID = nil
+                    }
+                }
+                .help("Drag to reorder")
+            }
+        }
     }
 }
 
@@ -296,7 +665,7 @@ private struct EmptyStateView: View {
         VStack(spacing: 12) {
             Image(systemName: "command").font(.system(size: 40)).foregroundStyle(.tertiary)
             Text("No shortcuts yet").font(.system(size: 17, weight: .semibold))
-            Text("Add a shortcut for an app to jump to it, then press it again to cycle that app’s windows.")
+            Text("Add one app to cycle its windows, or add multiple apps to cycle between them.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
             Button(action: onAdd) { Label("Add Shortcut", systemImage: "plus") }
