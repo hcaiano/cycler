@@ -45,7 +45,9 @@ final class AppActivator {
             Self.activate(app)
             let focusedWindows = Self.windows(of: apps)
             let visibleWindows = focusedWindows.isEmpty ? windows : focusedWindows
+            let remembered = lastIndex[bundleIdentifier].flatMap { visibleWindows.indices.contains($0) ? $0 : nil }
             let current = Self.indexOfMain(in: visibleWindows)
+                ?? remembered
                 ?? (visibleWindows.isEmpty ? nil : 0)
             if let current {
                 let selectedWindow = visibleWindows[current]
