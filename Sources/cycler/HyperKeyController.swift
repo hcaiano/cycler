@@ -14,6 +14,7 @@ final class HyperKeyController {
     private static let capsLockKeyCode = 57
     private static let ownsCapsLockMappingKey = "CyclerOwnsCapsLockToF18Mapping"
     private static let inputMonitoringBlockedMessage = "Input Monitoring permission required"
+    private static let syntheticEventMarker: Int64 = 0x4359_4850 // "CYHP"
     private static var clearOnExit = false
     private static var installedAtexit = false
 
@@ -31,6 +32,7 @@ final class HyperKeyController {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var triggerDown = false
+    private var syntheticModifierKeyCodesDown: [CGKeyCode] = []
     private var didApplyMapping = false
     private var includeShift = true
     private var activeTrigger: TriggerKey?
@@ -169,6 +171,7 @@ final class HyperKeyController {
     }
 
     func stop() {
+        releaseSyntheticModifiers()
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -199,30 +202,97 @@ final class HyperKeyController {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticEventMarker {
+            return Unmanaged.passUnretained(event)
+        }
+
         if type == .keyDown, keyCode == triggerKeyCode {
-            triggerDown = true
+            if !triggerDown {
+                triggerDown = true
+                pressSyntheticModifiers()
+            }
             return nil
         }
         if type == .keyUp, keyCode == triggerKeyCode {
             triggerDown = false
+            releaseSyntheticModifiers()
             return nil
         }
 
-        if triggerDown && (type == .keyDown || type == .keyUp || type == .flagsChanged) {
-            event.flags = CGEventFlags(rawValue: event.flags.rawValue | hyperFlags.rawValue)
+        if triggerDown && (type == .keyDown || type == .keyUp) {
+            Self.replaceModifierFlags(on: event, with: hyperFlags)
             return Unmanaged.passUnretained(event)
         }
         return Unmanaged.passUnretained(event)
     }
 
-    private var hyperFlags: CGEventFlags {
-        var raw = CGEventFlags.maskCommand.rawValue |
-            CGEventFlags.maskControl.rawValue |
-            CGEventFlags.maskAlternate.rawValue
-        if includeShift {
-            raw |= CGEventFlags.maskShift.rawValue
+    private func pressSyntheticModifiers() {
+        guard syntheticModifierKeyCodesDown.isEmpty else { return }
+        let keyCodes = Self.modifierKeyCodes(includeShift: includeShift)
+        var activeKeyCodes: [CGKeyCode] = []
+        for keyCode in keyCodes {
+            activeKeyCodes.append(keyCode)
+            Self.postSyntheticModifier(keyCode, keyDown: true, activeKeyCodes: activeKeyCodes)
         }
+        syntheticModifierKeyCodesDown = keyCodes
+    }
+
+    private func releaseSyntheticModifiers() {
+        guard !syntheticModifierKeyCodesDown.isEmpty else { return }
+        var activeKeyCodes = syntheticModifierKeyCodesDown
+        for keyCode in syntheticModifierKeyCodesDown.reversed() {
+            activeKeyCodes.removeAll { $0 == keyCode }
+            Self.postSyntheticModifier(keyCode, keyDown: false, activeKeyCodes: activeKeyCodes)
+        }
+        syntheticModifierKeyCodesDown = []
+    }
+
+    private static func modifierKeyCodes(includeShift: Bool) -> [CGKeyCode] {
+        var keyCodes: [CGKeyCode] = [59, 58] // Control, Option
+        if includeShift { keyCodes.append(56) }
+        keyCodes.append(55) // Command
+        return keyCodes
+    }
+
+    private static func postSyntheticModifier(_ keyCode: CGKeyCode, keyDown: Bool, activeKeyCodes: [CGKeyCode]) {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: keyDown) else {
+            return
+        }
+        replaceModifierFlags(on: event, with: modifierFlags(for: activeKeyCodes))
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        event.post(tap: .cghidEventTap)
+    }
+
+    private var hyperFlags: CGEventFlags {
+        Self.modifierFlags(for: Self.modifierKeyCodes(includeShift: includeShift))
+    }
+
+    private static func modifierFlags(for keyCodes: [CGKeyCode]) -> CGEventFlags {
+        let raw = keyCodes.reduce(UInt64(0)) { $0 | modifierFlagRawValue(for: $1) }
         return CGEventFlags(rawValue: raw)
+    }
+
+    private static func replaceModifierFlags(on event: CGEvent, with flags: CGEventFlags) {
+        let base = event.flags.rawValue & ~modifierMaskRawValue
+        event.flags = CGEventFlags(rawValue: base | flags.rawValue)
+    }
+
+    private static var modifierMaskRawValue: UInt64 {
+        CGEventFlags.maskControl.rawValue |
+            CGEventFlags.maskAlternate.rawValue |
+            CGEventFlags.maskShift.rawValue |
+            CGEventFlags.maskCommand.rawValue |
+            0x2b
+    }
+
+    private static func modifierFlagRawValue(for keyCode: CGKeyCode) -> UInt64 {
+        switch keyCode {
+        case 59: return CGEventFlags.maskControl.rawValue | 0x1
+        case 58: return CGEventFlags.maskAlternate.rawValue | 0x20
+        case 56: return CGEventFlags.maskShift.rawValue | 0x2
+        case 55: return CGEventFlags.maskCommand.rawValue | 0x8
+        default: return 0
+        }
     }
 
     private static func ensureListenEventAccess() -> Bool {
