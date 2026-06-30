@@ -36,7 +36,7 @@ final class CycleHUD {
     private var shownMode: Mode?
 
     private let corner: CGFloat = 14
-    private let width: CGFloat = 352      // fixed: titles truncate, panel never resizes while cycling
+    private let width: CGFloat = 384      // fixed: titles truncate, panel never resizes while cycling
     private let maxVisibleRows = 7
 
     private init() {
