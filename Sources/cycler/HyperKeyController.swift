@@ -106,37 +106,22 @@ final class HyperKeyController {
         if tap != nil, activeTrigger != trigger {
             stop()
         }
-        if tap != nil {
-            self.includeShift = includeShift
-            return .started
-        }
         self.includeShift = includeShift
 
         guard Self.ensureListenEventAccess() else {
+            if tap != nil { stop() }
             return .blocked(Self.inputMonitoringBlockedMessage)
         }
 
         if trigger.needsCapsLockRemap {
-            let mapping = Self.currentMapping()
-            let mappingIsOurs = Self.isMappingOurs(mapping)
-            guard Self.isMappingEmpty(mapping) || mappingIsOurs else {
-                return .blocked("existing hidutil UserKeyMapping is not Cycler's CapsLock->F18 mapping")
+            if let blocked = ensureCapsLockMapping() {
+                if tap != nil { stop() }
+                return .blocked(blocked)
             }
-            var createdMapping = false
-            if !mappingIsOurs {
-                guard Self.applyCapsLockToF18() else {
-                    return .blocked("hidutil failed to apply CapsLock->F18")
-                }
-                createdMapping = true
-            }
-            if createdMapping || Self.ownsCapsLockMapping {
-                didApplyMapping = true
-                if createdMapping {
-                    Self.setOwnsCapsLockMapping(true)
-                }
-                Self.clearOnExit = true
-                Self.installAtexit()
-            }
+        }
+
+        if tap != nil {
+            return .started
         }
 
         triggerKeyCode = Self.watchKeyCode(for: trigger)
@@ -168,6 +153,30 @@ final class HyperKeyController {
         CGEvent.tapEnable(tap: created, enable: true)
         activeTrigger = trigger
         return .started
+    }
+
+    private func ensureCapsLockMapping() -> String? {
+        let mapping = Self.currentMapping()
+        let mappingIsOurs = Self.isMappingOurs(mapping)
+        guard Self.isMappingEmpty(mapping) || mappingIsOurs else {
+            return "existing hidutil UserKeyMapping is not Cycler's CapsLock->F18 mapping"
+        }
+        var createdMapping = false
+        if !mappingIsOurs {
+            guard Self.applyCapsLockToF18() else {
+                return "hidutil failed to apply CapsLock->F18"
+            }
+            createdMapping = true
+        }
+        if createdMapping || Self.ownsCapsLockMapping {
+            didApplyMapping = true
+            if createdMapping {
+                Self.setOwnsCapsLockMapping(true)
+            }
+            Self.clearOnExit = true
+            Self.installAtexit()
+        }
+        return nil
     }
 
     func stop() {
