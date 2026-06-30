@@ -1,0 +1,255 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish, for example v0.4.1'
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, notarize, and publish
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags origin
+
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)"
+          expected_tag="v${version}"
+
+          if [ "${RELEASE_TAG}" != "${expected_tag}" ]; then
+            echo "::error::Release tag ${RELEASE_TAG} does not match Info.plist version ${version}."
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "::error::Tag ${RELEASE_TAG} does not exist."
+            exit 1
+          fi
+
+          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${tag_commit}" origin/main; then
+            echo "::error::Tag ${RELEASE_TAG} is not contained in origin/main."
+            exit 1
+          fi
+
+          {
+            echo "tag=${RELEASE_TAG}"
+            echo "version=${version}"
+            echo "build=${build}"
+            echo "dmg=dist/Cycler-${version}.dmg"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Validate release secrets
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in \
+            DEVELOPER_ID_CERT_P12_BASE64 \
+            DEVELOPER_ID_CERT_PASSWORD \
+            APPLE_ID \
+            APPLE_TEAM_ID \
+            APPLE_APP_SPECIFIC_PASSWORD \
+            SPARKLE_ED_PRIVATE_KEY
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required repository secret: ${name}"
+              missing=1
+            fi
+          done
+
+          [ "${missing}" -eq 0 ]
+
+      - name: Import signing credentials
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          keychain_path="${RUNNER_TEMP}/cycler-release.keychain-db"
+          keychain_password="$(uuidgen)"
+          cert_path="${RUNNER_TEMP}/developer-id.p12"
+          sparkle_key_path="${RUNNER_TEMP}/sparkle-ed-private-key"
+
+          {
+            echo "KEYCHAIN_PATH=${keychain_path}"
+            echo "KEYCHAIN_PASSWORD=${keychain_password}"
+            echo "NOTARY_PROFILE=cycler-notary"
+          } >> "${GITHUB_ENV}"
+
+          if ! printf '%s' "${DEVELOPER_ID_CERT_P12_BASE64}" | base64 --decode > "${cert_path}" 2>/dev/null; then
+            printf '%s' "${DEVELOPER_ID_CERT_P12_BASE64}" | base64 -D > "${cert_path}"
+          fi
+          printf '%s' "${SPARKLE_ED_PRIVATE_KEY}" > "${sparkle_key_path}"
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          existing_keychains=()
+          while IFS= read -r keychain; do
+            keychain="$(printf '%s' "${keychain}" | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')"
+            existing_keychains+=("${keychain}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "${keychain_path}" "${existing_keychains[@]}"
+
+          security import "${cert_path}" \
+            -k "${keychain_path}" \
+            -P "${DEVELOPER_ID_CERT_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "${keychain_password}" "${keychain_path}"
+          security find-identity -p codesigning -v "${keychain_path}"
+
+          xcrun notarytool store-credentials "cycler-notary" \
+            --apple-id "${APPLE_ID}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}"
+
+          swift build
+          generate_keys="$(find .build/artifacts -type f -name generate_keys 2>/dev/null | head -1)"
+          [ -x "${generate_keys}" ] || { echo "::error::Sparkle generate_keys not found."; exit 1; }
+          "${generate_keys}" -f "${sparkle_key_path}"
+
+          expected_public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' Resources/Info.plist)"
+          if ! "${generate_keys}" -p | grep -Fq "${expected_public_key}"; then
+            echo "::error::Imported Sparkle private key does not match SUPublicEDKey."
+            exit 1
+          fi
+
+      - name: Quality gate
+        run: |
+          set -euo pipefail
+          swift build
+          swift run cycler-tests
+
+      - name: Build and notarize release
+        env:
+          DMG: ${{ steps.metadata.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          REQUIRE_DEVELOPER_ID_SIGNATURE=1 ./Scripts/build-app.sh dist
+          ./Scripts/notarize.sh dist/Cycler.app
+          ./Scripts/make-dmg.sh dist
+          ./Scripts/notarize.sh "${DMG}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          DMG: ${{ steps.metadata.outputs.dmg }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${DMG}" --clobber
+          else
+            gh release create "${TAG}" "${DMG}" \
+              --title "Cycler ${VERSION}" \
+              --generate-notes \
+              --verify-tag
+          fi
+
+      - name: Regenerate appcast
+        env:
+          DMG: ${{ steps.metadata.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          ./Scripts/sparkle-appcast.sh "${DMG}"
+
+      - name: Commit appcast to main
+        id: appcast
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          appcast="${RUNNER_TEMP}/appcast.xml"
+          cp web/appcast.xml "${appcast}"
+          git restore --staged --worktree .
+          git fetch origin main
+          git switch -C main origin/main
+
+          if grep -Fq "releases/download/${TAG}/Cycler-${VERSION}.dmg" web/appcast.xml; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "web/appcast.xml already points at ${TAG}."
+            exit 0
+          fi
+
+          cp "${appcast}" web/appcast.xml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/appcast.xml
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "web/appcast.xml already points at ${TAG}."
+            exit 0
+          fi
+
+          git commit -m "chore(release): appcast for ${VERSION}"
+          git push origin HEAD:main
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Deploy appcast feed
+        if: steps.appcast.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy-web.yml --ref main
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: |
+          set +e
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "${KEYCHAIN_PATH}"
+          fi
+          rm -f "${RUNNER_TEMP}/developer-id.p12" "${RUNNER_TEMP}/sparkle-ed-private-key"

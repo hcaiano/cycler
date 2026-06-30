@@ -115,6 +115,51 @@ The full release sequence is therefore: `build-app.sh` → `notarize.sh` (app) �
 → `notarize.sh` (DMG) → publish the GitHub release with the DMG → `sparkle-appcast.sh` →
 commit `web/appcast.xml`.
 
+## Automated release
+
+`.github/workflows/release.yml` runs the same release sequence on a GitHub macOS runner when a
+`v*` tag is pushed, and can also be run manually with `workflow_dispatch` for an existing tag.
+The workflow verifies that the tag matches `CFBundleShortVersionString`, builds a universal
+Developer ID app, notarizes and staples the app and DMG, creates or updates the GitHub release,
+regenerates `web/appcast.xml`, commits it to `main`, then explicitly dispatches the website
+deploy workflow. The explicit dispatch is needed because pushes made by `GITHUB_TOKEN` do not
+trigger normal `push` workflows.
+
+Required repository secrets:
+
+- `DEVELOPER_ID_CERT_P12_BASE64`: base64 of the exported Developer ID Application `.p12`.
+- `DEVELOPER_ID_CERT_PASSWORD`: password used when exporting that `.p12`.
+- `APPLE_ID`: Apple ID used for notarization.
+- `APPLE_TEAM_ID`: Apple Developer team id.
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for `notarytool store-credentials`.
+- `SPARKLE_ED_PRIVATE_KEY`: contents exported by Sparkle's `generate_keys -x <file>`.
+
+One-time setup on the release machine:
+
+```sh
+# Export only the "Developer ID Application" identity from Keychain Access to developer-id.p12.
+base64 -i developer-id.p12 | tr -d '\n' | pbcopy
+
+./Scripts/sparkle-keygen.sh
+GEN="$(find .build/artifacts -type f -name generate_keys | head -1)"
+"$GEN" -x sparkle-ed-private-key.txt
+pbcopy < sparkle-ed-private-key.txt
+```
+
+Paste the copied values into the matching GitHub secrets, then remove the exported local files.
+
+Per release:
+
+```sh
+# 1. Bump Resources/Info.plist and merge to main.
+# 2. Tag the exact main commit; pushing the tag starts the release workflow.
+git tag v<version> origin/main
+git push origin v<version>
+```
+
+If the tag already exists and no release was created, run the **Release** workflow manually with
+the existing tag, for example `v0.4.1`.
+
 ## Website auto-deploy
 
 `web/` is a static site served by a Cloudflare Worker. Pushing a change under `web/` to `main`
